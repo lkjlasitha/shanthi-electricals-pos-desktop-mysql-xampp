@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', sans-serif;
+}
+
+/* Thin scrollbars feel more "workstation software" than default chunky ones */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #DCE0E4; border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+@media print {
+  @page { margin: 5mm; }
+  body * { visibility: hidden !important; }
+  .barcode-print-area, .barcode-print-area * { visibility: visible !important; }
+  .barcode-print-area {
+    position: absolute !important;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-content: flex-start !important;
+  }
+  .barcode-label { box-shadow: none !important; page-break-inside: avoid; }
+  .no-print { display: none !important; }
+}

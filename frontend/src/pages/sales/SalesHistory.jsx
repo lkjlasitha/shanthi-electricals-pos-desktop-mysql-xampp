@@ -1,0 +1,86 @@
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { SalesAPI } from '../../api/endpoints';
+import { PageHeader, Card, Modal, Button, inputClass } from '../../components/ui.jsx';
+import { formatMoney, formatDate } from '../../utils/format';
+import DocumentActions from '../../components/DocumentActions.jsx';
+
+export default function SalesHistory() {
+  const navigate = useNavigate();
+  const [sales, setSales] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState(null);
+
+  const load = () => {
+    setLoading(true);
+    SalesAPI.list({ reference_code: search || undefined, per_page: 50 }).then((r) => setSales(r.data.data || r.data)).finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [search]);
+
+  return (
+    <div>
+      <PageHeader title="Sales History" subtitle="All completed POS sales." />
+      <Card className="p-4 mb-4">
+        <input className={inputClass + ' max-w-xs'} placeholder="Search by invoice ref…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      </Card>
+      <Card>
+        <table className="w-full text-sm">
+          <thead><tr className="border-b border-slate-200 text-left text-graphite-600">
+            <th className="px-4 py-3 font-medium">Invoice</th><th className="px-4 py-3 font-medium">Date</th>
+            <th className="px-4 py-3 font-medium">Customer</th><th className="px-4 py-3 font-medium">Warehouse</th>
+            <th className="px-4 py-3 font-medium">Total</th><th className="px-4 py-3 font-medium">Payment</th><th className="px-4 py-3 font-medium text-right">Output</th>
+          </tr></thead>
+          <tbody>
+            {loading && <tr><td colSpan={7} className="px-4 py-6 text-center text-graphite-500">Loading…</td></tr>}
+            {!loading && sales.length === 0 && <tr><td colSpan={7} className="px-4 py-6 text-center text-graphite-500">No sales yet.</td></tr>}
+            {!loading && sales.map((s) => (
+              <tr key={s.id} className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => setSelected(s)}>
+                <td className="px-4 py-2.5 font-mono text-xs text-copper-600">{s.reference_code}</td>
+                <td className="px-4 py-2.5">{formatDate(s.date)}</td>
+                <td className="px-4 py-2.5">{s.Customer?.name}</td>
+                <td className="px-4 py-2.5">{s.Warehouse?.name}</td>
+                <td className="px-4 py-2.5">{formatMoney(s.grand_total)}</td>
+                <td className="px-4 py-2.5 capitalize">{s.payment_status}</td>
+                <td className="px-4 py-2.5"><div className="flex justify-end"><DocumentActions type="sale" record={s} allowReceipt compact /></div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+
+      <Modal open={!!selected} onClose={() => setSelected(null)} title={`Invoice ${selected?.reference_code || ''}`} width="max-w-xl">
+        {selected && (
+          <div className="text-sm space-y-3">
+            <div className="flex justify-between text-graphite-600">
+              <span>{formatDate(selected.date)}</span>
+              <span>{selected.Customer?.name} · {selected.Warehouse?.name}</span>
+            </div>
+            <table className="w-full">
+              <thead><tr className="text-left text-graphite-500 border-b border-slate-100">
+                <th className="py-1">Item</th><th className="py-1 text-right">Qty</th><th className="py-1 text-right">Price</th><th className="py-1 text-right">Subtotal</th>
+              </tr></thead>
+              <tbody>
+                {(selected.items || []).map((it) => (
+                  <tr key={it.id} className="border-b border-slate-50">
+                    <td className="py-1">{it.Product?.name}</td>
+                    <td className="py-1 text-right">{it.quantity}</td>
+                    <td className="py-1 text-right">{formatMoney(it.product_price)}</td>
+                    <td className="py-1 text-right">{formatMoney(it.sub_total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="flex justify-between pt-2 border-t border-slate-200 font-display font-semibold text-base">
+              <span>Total</span><span className="text-copper-600">{formatMoney(selected.grand_total)}</span>
+            </div>
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <DocumentActions type="sale" record={selected} allowReceipt />
+              <Button type="button" onClick={() => navigate(`/returns?sale_id=${selected.id}`)}>Create Customer Return</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
