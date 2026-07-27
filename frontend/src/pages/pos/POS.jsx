@@ -1,9 +1,23 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { ProductsAPI, CustomersAPI, WarehousesAPI, SalesAPI, QuotationsHoldsAPI, RegisterAPI, CategoriesAPI } from '../../api/endpoints';
+import {
+  ProductsAPI, CustomersAPI, WarehousesAPI, SalesAPI,
+  QuotationsHoldsAPI, RegisterAPI, CategoriesAPI,
+} from '../../api/endpoints';
 import { Button, Card, inputClass } from '../../components/ui.jsx';
 import { formatMoney, todayISO } from '../../utils/format';
 import { useAuth } from '../../context/AuthContext.jsx';
 import DocumentActions from '../../components/DocumentActions.jsx';
+
+function numericValue(value, fallback = 0) {
+  if (value === '' || value === null || value === undefined) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function isEditableElement(element) {
+  if (!element) return false;
+  return element.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName);
+}
 
 export default function POS() {
   const { user } = useAuth();
@@ -14,23 +28,33 @@ export default function POS() {
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
-  const [cart, setCart] = useState([]); // { product, quantity, price }
+  const [cart, setCart] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState('');
-  const [discount, setDiscount] = useState(0);
-  const [taxRate, setTaxRate] = useState(0);
+  const [discount, setDiscount] = useState('0');
+  const [taxRate, setTaxRate] = useState('0');
   const [paymentType, setPaymentType] = useState('cash');
   const [receivedAmount, setReceivedAmount] = useState('');
   const [register, setRegister] = useState(null);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('error');
   const [lastReceipt, setLastReceipt] = useState(null);
+  const [showQuickItem, setShowQuickItem] = useState(false);
+  const [quickItem, setQuickItem] = useState({ name: '', price: '', quantity: '1' });
   const barcodeInputRef = useRef(null);
+  const quickItemNameRef = useRef(null);
+  const manualLineSequence = useRef(0);
 
-  const focusScanner = useCallback(({ select = false } = {}) => {
+  const focusScanner = useCallback(({ select = false, force = false } = {}) => {
     window.requestAnimationFrame(() => {
       const input = barcodeInputRef.current;
       if (!input) return;
+
+      // Do not steal focus while the cashier is editing quantity, price,
+      // discount, search, customer, or any other form control.
+      const active = document.activeElement;
+      if (!force && active !== input && isEditableElement(active)) return;
+
       input.focus();
       if (select) input.select();
     });
@@ -44,16 +68,22 @@ export default function POS() {
   }, []);
 
   useEffect(() => {
-    focusScanner();
+    focusScanner({ force: true });
     const handleShortcut = (event) => {
       if (event.key === 'F8') {
         event.preventDefault();
-        focusScanner({ select: true });
+        focusScanner({ select: true, force: true });
       }
     };
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
   }, [focusScanner]);
+
+  useEffect(() => {
+    if (showQuickItem) {
+      window.requestAnimationFrame(() => quickItemNameRef.current?.focus());
+    }
+  }, [showQuickItem]);
 
   const loadProducts = useCallback(() => {
     ProductsAPI.list({ search, category_id: categoryId || undefined, per_page: 60 }).then((res) =>
@@ -64,102 +94,209 @@ export default function POS() {
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
   const addToCart = (product) => {
-    setCart((prev) => {
-      const existing = prev.find((l) => l.product.id === product.id);
+    const lineId = `product-${product.id}`;
+    setCart((previous) => {
+      const existing = previous.find((line) => line.line_id === lineId);
       if (existing) {
-        return prev.map((l) => (l.product.id === product.id ? { ...l, quantity: l.quantity + 1 } : l));
+        return previous.map((line) => line.line_id === lineId
+          ? { ...line, quantity: String(numericValue(line.quantity) + 1) }
+          : line);
       }
-      return [...prev, { product, quantity: 1, price: product.product_price, discount_value: 0, discount_type: 'none', tax_value: product.order_tax || 0, tax_type: product.tax_type || 'none' }];
+      return [...previous, {
+        line_id: lineId,
+        product,
+        is_manual: false,
+        item_name: product.name,
+        item_code: product.code || '',
+        quantity: '1',
+        price: String(product.product_price ?? 0),
+        discount_value: '',
+        discount_type: 'none',
+        tax_value: String(product.order_tax || 0),
+        tax_type: product.tax_type || 'none',
+      }];
     });
+    setMessage(`${product.name} added to the cart.`);
+    setMessageType('success');
+  };
+
+  const addQuickItem = (event) => {
+    event.preventDefault();
+    const name = quickItem.name.trim();
+    const price = Number(quickItem.price);
+    const quantity = Number(quickItem.quantity);
+
+    if (!name) {
+      setMessage('Enter a name for the quick item.');
+      setMessageType('error');
+      quickItemNameRef.current?.focus();
+      return;
+    }
+    if (quickItem.price === '' || !Number.isFinite(price) || price < 0) {
+      setMessage('Enter a valid quick-item price.');
+      setMessageType('error');
+      return;
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setMessage('Quick-item quantity must be greater than zero.');
+      setMessageType('error');
+      return;
+    }
+
+    manualLineSequence.current += 1;
+    setCart((previous) => [...previous, {
+      line_id: `manual-${Date.now()}-${manualLineSequence.current}`,
+      product: null,
+      is_manual: true,
+      item_name: name,
+      item_code: '',
+      quantity: quickItem.quantity,
+      price: quickItem.price,
+      discount_value: '',
+      discount_type: 'none',
+      tax_value: '0',
+      tax_type: 'none',
+    }]);
+    setQuickItem({ name: '', price: '', quantity: '1' });
+    setShowQuickItem(false);
+    setMessage(`${name} added as a manual bill item. Stock was not changed.`);
+    setMessageType('success');
   };
 
   const scanBarcode = async (event) => {
     event.preventDefault();
     const scannedCode = String(barcode || '').replace(/[\r\n\t]/g, '').trim();
     if (!scannedCode) {
-      focusScanner();
+      focusScanner({ force: true });
       return;
     }
 
-    // Clear immediately so a fast second scan cannot be appended to the first.
     setBarcode('');
     try {
       const response = await ProductsAPI.lookup(scannedCode);
       addToCart(response.data.data);
-      setMessage(`${response.data.data.name} added to the cart.`);
-      setMessageType('success');
     } catch (error) {
       setMessage(error.response?.data?.message || `No product found for code "${scannedCode}".`);
       setMessageType('error');
     } finally {
-      focusScanner();
+      focusScanner({ force: true });
     }
   };
 
-  const updateLine = (productId, patch) => {
-    setCart((prev) => prev.map((l) => (l.product.id === productId ? { ...l, ...patch } : l)));
-  };
-  const removeLine = (productId) => setCart((prev) => prev.filter((l) => l.product.id !== productId));
-
-  const lineSubtotal = (l) => {
-    const lineTotal = Number(l.quantity) * Number(l.price);
-    let discountAmount = 0;
-    if (l.discount_type === 'percentage') discountAmount = (lineTotal * Number(l.discount_value || 0)) / 100;
-    else if (l.discount_type === 'fixed') discountAmount = Number(l.discount_value || 0);
-    const taxedBase = lineTotal - discountAmount;
-    let taxAmount = 0;
-    if (l.tax_type === 'exclusive') taxAmount = (taxedBase * Number(l.tax_value || 0)) / 100;
-    return taxedBase + taxAmount;
+  const updateLine = (lineId, patch) => {
+    setCart((previous) => previous.map((line) => line.line_id === lineId ? { ...line, ...patch } : line));
   };
 
-  const subTotal = useMemo(() => cart.reduce((sum, l) => sum + lineSubtotal(l), 0), [cart]);
-  const orderTaxAmount = useMemo(() => ((subTotal - Number(discount || 0)) * Number(taxRate || 0)) / 100, [subTotal, discount, taxRate]);
-  const grandTotal = useMemo(() => subTotal - Number(discount || 0) + orderTaxAmount, [subTotal, discount, orderTaxAmount]);
+  const removeLine = (lineId) => {
+    setCart((previous) => previous.filter((line) => line.line_id !== lineId));
+  };
+
+  const lineBaseTotal = (line) => numericValue(line.quantity) * numericValue(line.price);
+
+  const lineDiscountAmount = (line) => {
+    const lineTotal = lineBaseTotal(line);
+    const value = numericValue(line.discount_value);
+    if (line.discount_type === 'percentage') return (lineTotal * value) / 100;
+    if (line.discount_type === 'fixed') return value;
+    return 0;
+  };
+
+  const lineTaxAmount = (line) => {
+    const taxable = lineBaseTotal(line) - lineDiscountAmount(line);
+    if (line.tax_type === 'exclusive') return (taxable * numericValue(line.tax_value)) / 100;
+    return 0;
+  };
+
+  const lineSubtotal = (line) => lineBaseTotal(line) - lineDiscountAmount(line) + lineTaxAmount(line);
+
+  const rawSubtotal = useMemo(() => cart.reduce((sum, line) => sum + lineBaseTotal(line), 0), [cart]);
+  const itemDiscountTotal = useMemo(() => cart.reduce((sum, line) => sum + lineDiscountAmount(line), 0), [cart]);
+  const subTotal = useMemo(() => cart.reduce((sum, line) => sum + lineSubtotal(line), 0), [cart]);
+  const orderDiscount = numericValue(discount);
+  const orderTaxAmount = useMemo(
+    () => ((subTotal - orderDiscount) * numericValue(taxRate)) / 100,
+    [subTotal, orderDiscount, taxRate]
+  );
+  const grandTotal = Math.max(0, subTotal - orderDiscount + orderTaxAmount);
+
+  const validateCart = () => {
+    for (let index = 0; index < cart.length; index += 1) {
+      const line = cart[index];
+      const quantity = Number(line.quantity);
+      const price = Number(line.price);
+      const discountValue = numericValue(line.discount_value);
+      const label = line.item_name || `Item ${index + 1}`;
+
+      if (!Number.isFinite(quantity) || quantity <= 0) return `${label}: quantity must be greater than zero.`;
+      if (line.price === '' || !Number.isFinite(price) || price < 0) return `${label}: enter a valid selling price.`;
+      if (line.is_manual && !String(line.item_name || '').trim()) return `Manual item ${index + 1} needs a name.`;
+      if (line.discount_type === 'percentage' && discountValue > 100) return `${label}: percentage discount cannot exceed 100%.`;
+      if (lineDiscountAmount(line) > lineBaseTotal(line)) return `${label}: discount cannot exceed the item total.`;
+    }
+
+    if (orderDiscount > subTotal) return 'Order discount cannot exceed the sale subtotal.';
+    if (receivedAmount !== '' && (!Number.isFinite(Number(receivedAmount)) || Number(receivedAmount) < 0)) {
+      return 'Enter a valid received amount.';
+    }
+    return '';
+  };
 
   const resetCart = () => {
     setCart([]);
-    setDiscount(0);
-    setTaxRate(0);
+    setDiscount('0');
+    setTaxRate('0');
     setReceivedAmount('');
+    setQuickItem({ name: '', price: '', quantity: '1' });
+    setShowQuickItem(false);
   };
 
   const checkout = async () => {
-    if (!warehouseId) { setMessageType('error'); return setMessage('Select a warehouse first.'); }
-    if (!customerId) { setMessageType('error'); return setMessage('Select a customer (use "Walk-in Customer" if none).'); }
-    if (cart.length === 0) { setMessageType('error'); return setMessage('Cart is empty.'); }
+    if (!warehouseId) { setMessageType('error'); setMessage('Select a warehouse first.'); return; }
+    if (!customerId) { setMessageType('error'); setMessage('Select a customer (use "Walk-in Customer" if none).'); return; }
+    if (cart.length === 0) { setMessageType('error'); setMessage('Cart is empty.'); return; }
+
+    const validationError = validateCart();
+    if (validationError) {
+      setMessage(validationError);
+      setMessageType('error');
+      return;
+    }
 
     const payload = {
       date: todayISO(),
       customer_id: customerId,
       warehouse_id: warehouseId,
-      discount: Number(discount || 0),
-      tax_rate: Number(taxRate || 0),
+      discount: orderDiscount,
+      tax_rate: numericValue(taxRate),
       payment_type: paymentType,
       paid_amount: receivedAmount === '' ? grandTotal : Number(receivedAmount),
       received_amount: receivedAmount === '' ? grandTotal : Number(receivedAmount),
       pos_register_id: register?.id || null,
-      items: cart.map((l) => ({
-        product_id: l.product.id,
-        quantity: l.quantity,
-        product_price: l.price,
-        discount_type: l.discount_type,
-        discount_value: l.discount_value,
-        tax_type: l.tax_type,
-        tax_value: l.tax_value,
+      items: cart.map((line) => ({
+        product_id: line.is_manual ? null : line.product?.id,
+        is_manual: line.is_manual,
+        item_name: line.item_name,
+        item_code: line.item_code || null,
+        quantity: Number(line.quantity),
+        product_price: Number(line.price),
+        discount_type: line.discount_type,
+        discount_value: numericValue(line.discount_value),
+        tax_type: line.tax_type,
+        tax_value: numericValue(line.tax_value),
       })),
     };
+
     try {
-      const res = await SalesAPI.create(payload);
-      setLastReceipt(res.data.data);
+      const response = await SalesAPI.create(payload);
+      setLastReceipt(response.data.data);
       resetCart();
       loadProducts();
       setMessage('Sale completed. The scanner is ready for the next bill.');
       setMessageType('success');
-    } catch (e) {
-      setMessage(e.response?.data?.message || 'Checkout failed');
+      focusScanner({ force: true });
+    } catch (error) {
+      setMessage(error.response?.data?.message || 'Checkout failed');
       setMessageType('error');
-    } finally {
-      focusScanner();
     }
   };
 
@@ -167,39 +304,53 @@ export default function POS() {
     if (cart.length === 0) {
       setMessage('Cart is empty.');
       setMessageType('error');
-      focusScanner();
       return;
     }
+
+    if (cart.some((line) => line.is_manual || line.discount_type !== 'none')) {
+      setMessage('A cart containing manual items or item discounts cannot be held because those details would be lost. Complete this sale or remove those lines first.');
+      setMessageType('error');
+      return;
+    }
+
+    const validationError = validateCart();
+    if (validationError) {
+      setMessage(validationError);
+      setMessageType('error');
+      return;
+    }
+
     try {
       await QuotationsHoldsAPI.createHold({
         warehouse_id: warehouseId,
         customer_id: customerId || null,
-        items: cart.map((l) => ({ product_id: l.product.id, quantity: l.quantity, price: l.price })),
+        items: cart.map((line) => ({
+          product_id: line.product.id,
+          quantity: Number(line.quantity),
+          price: Number(line.price),
+        })),
       });
       resetCart();
       setMessage('Cart held. You can resume it from Holds.');
       setMessageType('success');
+      focusScanner({ force: true });
     } catch (error) {
       setMessage(error.response?.data?.message || 'The cart could not be held.');
       setMessageType('error');
-    } finally {
-      focusScanner();
     }
   };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
-      {/* Product browser */}
       <div className="lg:col-span-2 flex flex-col gap-4">
         <Card className="p-4 flex flex-wrap gap-3 items-center">
-          <select className={inputClass + ' max-w-[220px]'} value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+          <select className={inputClass + ' max-w-[220px]'} value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)}>
             <option value="">Warehouse…</option>
-            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            {warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
           </select>
           <form onSubmit={scanBarcode} className="flex-1 min-w-[240px]">
             <input
               ref={barcodeInputRef}
-              autoFocus
               autoComplete="off"
               spellCheck={false}
               aria-label="Barcode scanner input"
@@ -211,14 +362,14 @@ export default function POS() {
           </form>
           <button
             type="button"
-            onClick={() => focusScanner({ select: true })}
+            onClick={() => focusScanner({ select: true, force: true })}
             className="rounded-md border border-slate-200 px-3 py-2 text-xs font-medium text-graphite-700 hover:bg-slate-50"
             title="Focus the scanner field (F8)"
           >
             Focus scanner (F8)
           </button>
           <div className="w-full text-xs text-graphite-500">
-            USB scanner mode: <strong>HID Keyboard</strong> with an <strong>Enter/CR suffix</strong>. Scan when this field has the copper focus ring.
+            The scanner field will no longer take focus while you are typing in another field. Press <strong>F8</strong> whenever you want to scan.
           </div>
         </Card>
 
@@ -227,28 +378,78 @@ export default function POS() {
             className={inputClass + ' max-w-xs'}
             placeholder="Search product name/code…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(event) => setSearch(event.target.value)}
           />
-          <select className={inputClass + ' max-w-[200px]'} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+          <select className={inputClass + ' max-w-[200px]'} value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
             <option value="">All categories</option>
-            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
           </select>
+          <Button type="button" variant="secondary" onClick={() => setShowQuickItem((open) => !open)}>
+            {showQuickItem ? 'Close quick item' : '+ Quick item'}
+          </Button>
+          <span className="text-xs text-graphite-500">Use this for an item not yet saved in Products.</span>
         </Card>
+
+        {showQuickItem && (
+          <Card className="p-4 border-amber-200 bg-amber-50/60">
+            <form onSubmit={addQuickItem} className="flex flex-wrap items-end gap-3">
+              <div className="flex-1 min-w-[240px]">
+                <label className="block text-xs font-medium text-graphite-700 mb-1">Item name</label>
+                <input
+                  ref={quickItemNameRef}
+                  className={inputClass}
+                  maxLength={191}
+                  value={quickItem.name}
+                  onChange={(event) => setQuickItem((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Example: Special cable connector"
+                />
+              </div>
+              <div className="w-36">
+                <label className="block text-xs font-medium text-graphite-700 mb-1">Price</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  className={inputClass}
+                  value={quickItem.price}
+                  onChange={(event) => setQuickItem((current) => ({ ...current, price: event.target.value }))}
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="w-28">
+                <label className="block text-xs font-medium text-graphite-700 mb-1">Quantity</label>
+                <input
+                  type="number"
+                  min="0.01"
+                  step="any"
+                  className={inputClass}
+                  value={quickItem.quantity}
+                  onChange={(event) => setQuickItem((current) => ({ ...current, quantity: event.target.value }))}
+                />
+              </div>
+              <Button type="submit">Add to bill</Button>
+            </form>
+            <p className="mt-2 text-xs text-amber-800">
+              This line appears on the invoice and receipt but does not create a product or change warehouse stock.
+            </p>
+          </Card>
+        )}
 
         <Card className="p-4 flex-1 overflow-y-auto">
           <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-            {products.map((p) => (
+            {products.map((product) => (
               <button
-                key={p.id}
-                onClick={() => { addToCart(p); focusScanner(); }}
+                type="button"
+                key={product.id}
+                onClick={() => addToCart(product)}
                 className="text-left border border-slate-200 rounded-lg p-3 hover:border-copper-500 hover:shadow-sm transition"
               >
-                <div className="text-sm font-medium text-graphite-900 line-clamp-2 min-h-[2.5em]">{p.name}</div>
-                <div className="text-xs text-graphite-500 font-mono mt-1">{p.code}</div>
+                <div className="text-sm font-medium text-graphite-900 line-clamp-2 min-h-[2.5em]">{product.name}</div>
+                <div className="text-xs text-graphite-500 font-mono mt-1">{product.code}</div>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="font-display font-semibold text-copper-600">{formatMoney(p.product_price)}</span>
-                  <span className={`text-xs ${p.low_stock ? 'text-red-600' : 'text-graphite-400'}`}>
-                    {p.total_stock ?? 0} in stock
+                  <span className="font-display font-semibold text-copper-600">{formatMoney(product.product_price)}</span>
+                  <span className={`text-xs ${product.low_stock ? 'text-red-600' : 'text-graphite-400'}`}>
+                    {product.total_stock ?? 0} in stock
                   </span>
                 </div>
               </button>
@@ -258,11 +459,10 @@ export default function POS() {
         </Card>
       </div>
 
-      {/* Cart / checkout */}
       <Card className="flex flex-col p-4 h-full">
-        <select className={inputClass + ' mb-3'} value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+        <select className={inputClass + ' mb-3'} value={customerId} onChange={(event) => setCustomerId(event.target.value)}>
           <option value="">Select customer…</option>
-          {customers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.phone})</option>)}
+          {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name} ({customer.phone})</option>)}
         </select>
 
         {message && (
@@ -272,59 +472,120 @@ export default function POS() {
         )}
 
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100 -mx-1">
-          {cart.length === 0 && <p className="text-sm text-graphite-500 text-center py-8">Cart is empty. Tap a product or scan a barcode.</p>}
-          {cart.map((l) => (
-            <div key={l.product.id} className="py-2 px-1">
-              <div className="flex justify-between items-start">
-                <span className="text-sm font-medium">{l.product.name}</span>
-                <button onClick={() => removeLine(l.product.id)} className="text-graphite-400 hover:text-red-600 text-xs">Remove</button>
+          {cart.length === 0 && <p className="text-sm text-graphite-500 text-center py-8">Cart is empty. Tap a product, scan a barcode, or add a quick item.</p>}
+          {cart.map((line) => {
+            const discountAmount = lineDiscountAmount(line);
+            return (
+              <div key={line.line_id} className="py-3 px-1">
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <span className="text-sm font-medium">{line.item_name}</span>
+                    {line.is_manual && (
+                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-800">Manual</span>
+                    )}
+                  </div>
+                  <button type="button" onClick={() => removeLine(line.line_id)} className="text-graphite-400 hover:text-red-600 text-xs">Remove</button>
+                </div>
+
+                <div className="flex items-center gap-2 mt-2">
+                  <input
+                    aria-label={`Quantity for ${line.item_name}`}
+                    type="number"
+                    min="0.01"
+                    step="any"
+                    className={inputClass + ' w-20 py-1'}
+                    value={line.quantity}
+                    onChange={(event) => updateLine(line.line_id, { quantity: event.target.value })}
+                  />
+                  <span className="text-xs text-graphite-500">×</span>
+                  <input
+                    aria-label={`Price for ${line.item_name}`}
+                    type="number"
+                    min="0"
+                    step="any"
+                    className={inputClass + ' w-24 py-1'}
+                    value={line.price}
+                    onChange={(event) => updateLine(line.line_id, { price: event.target.value })}
+                  />
+                  <span className="ml-auto text-sm font-medium">{formatMoney(lineSubtotal(line))}</span>
+                </div>
+
+                <div className="mt-2 rounded-md bg-slate-50 p-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-medium text-graphite-600">Item discount</span>
+                    <button
+                      type="button"
+                      onClick={() => updateLine(line.line_id, { discount_type: 'percentage', discount_value: '5' })}
+                      className="rounded border border-slate-200 bg-white px-2 py-1 text-xs hover:border-copper-400"
+                    >5%</button>
+                    <button
+                      type="button"
+                      onClick={() => updateLine(line.line_id, { discount_type: 'percentage', discount_value: '10' })}
+                      className="rounded border border-slate-200 bg-white px-2 py-1 text-xs hover:border-copper-400"
+                    >10%</button>
+                    <select
+                      className={inputClass + ' w-32 py-1 text-xs'}
+                      value={line.discount_type}
+                      onChange={(event) => updateLine(line.line_id, {
+                        discount_type: event.target.value,
+                        discount_value: event.target.value === 'none' ? '' : line.discount_value,
+                      })}
+                    >
+                      <option value="none">No discount</option>
+                      <option value="percentage">Percentage</option>
+                      <option value="fixed">Fixed amount</option>
+                    </select>
+                    {line.discount_type !== 'none' && (
+                      <input
+                        aria-label={`Discount for ${line.item_name}`}
+                        type="number"
+                        min="0"
+                        max={line.discount_type === 'percentage' ? 100 : undefined}
+                        step="any"
+                        className={inputClass + ' w-24 py-1'}
+                        value={line.discount_value}
+                        onChange={(event) => updateLine(line.line_id, { discount_value: event.target.value })}
+                        placeholder={line.discount_type === 'percentage' ? '%' : 'Amount'}
+                      />
+                    )}
+                    {discountAmount > 0 && <span className="ml-auto text-xs font-medium text-emerald-700">Saved {formatMoney(discountAmount)}</span>}
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-2 mt-1">
-                <input
-                  type="number" min="0.01" step="any"
-                  className={inputClass + ' w-20 py-1'}
-                  value={l.quantity}
-                  onChange={(e) => updateLine(l.product.id, { quantity: Number(e.target.value) })}
-                />
-                <span className="text-xs text-graphite-500">×</span>
-                <input
-                  type="number" min="0" step="any"
-                  className={inputClass + ' w-24 py-1'}
-                  value={l.price}
-                  onChange={(e) => updateLine(l.product.id, { price: Number(e.target.value) })}
-                />
-                <span className="ml-auto text-sm font-medium">{formatMoney(lineSubtotal(l))}</span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="border-t border-slate-200 mt-3 pt-3 space-y-2 text-sm">
-          <div className="flex justify-between"><span>Subtotal</span><span>{formatMoney(subTotal)}</span></div>
+          <div className="flex justify-between"><span>Items before discount</span><span>{formatMoney(rawSubtotal)}</span></div>
+          {itemDiscountTotal > 0 && <div className="flex justify-between text-emerald-700"><span>Item discounts</span><span>-{formatMoney(itemDiscountTotal)}</span></div>}
+          <div className="flex justify-between"><span>Items subtotal</span><span>{formatMoney(subTotal)}</span></div>
           <div className="flex justify-between items-center">
-            <span>Discount</span>
-            <input type="number" min="0" step="any" className={inputClass + ' w-28 py-1'} value={discount} onChange={(e) => setDiscount(e.target.value)} />
+            <span>Whole-bill discount</span>
+            <input type="number" min="0" step="any" className={inputClass + ' w-28 py-1'} value={discount} onChange={(event) => setDiscount(event.target.value)} />
           </div>
           <div className="flex justify-between items-center">
             <span>Tax %</span>
-            <input type="number" min="0" step="any" className={inputClass + ' w-28 py-1'} value={taxRate} onChange={(e) => setTaxRate(e.target.value)} />
+            <input type="number" min="0" step="any" className={inputClass + ' w-28 py-1'} value={taxRate} onChange={(event) => setTaxRate(event.target.value)} />
           </div>
           <div className="flex justify-between font-display font-semibold text-lg pt-1">
             <span>Total</span><span className="text-copper-600">{formatMoney(grandTotal)}</span>
           </div>
 
-          <select className={inputClass} value={paymentType} onChange={(e) => setPaymentType(e.target.value)}>
+          <select className={inputClass} value={paymentType} onChange={(event) => setPaymentType(event.target.value)}>
             <option value="cash">Cash</option>
             <option value="card">Card</option>
             <option value="bank_transfer">Bank Transfer</option>
             <option value="credit">Credit (pay later)</option>
           </select>
           <input
-            type="number" min="0" step="any"
+            type="number"
+            min="0"
+            step="any"
             className={inputClass}
             placeholder={`Amount received (default: ${grandTotal.toFixed(2)})`}
             value={receivedAmount}
-            onChange={(e) => setReceivedAmount(e.target.value)}
+            onChange={(event) => setReceivedAmount(event.target.value)}
           />
 
           <div className="flex gap-2 pt-1">
@@ -343,7 +604,7 @@ export default function POS() {
               </div>
               <div className="flex items-center gap-3">
                 <DocumentActions type="sale" record={lastReceipt} allowReceipt />
-                <button onClick={() => setLastReceipt(null)} className="text-xs text-graphite-500">Dismiss</button>
+                <button type="button" onClick={() => setLastReceipt(null)} className="text-xs text-graphite-500">Dismiss</button>
               </div>
             </div>
           </Card>

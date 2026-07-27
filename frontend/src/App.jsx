@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
@@ -25,6 +25,30 @@ import Layout from './components/Layout.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 
 export default function App() {
+  useEffect(() => {
+    const isTextControl = (target) => target instanceof HTMLElement && (
+      target.isContentEditable
+      || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+    );
+
+    const recoverKeyboardFocus = (event) => {
+      const target = event.target;
+      if (!isTextControl(target) || target.disabled) return;
+
+      window.shanthiDesktop?.ensureKeyboardFocus?.();
+      window.requestAnimationFrame(() => {
+        // The normal pointer action usually focuses the field. Only repair it
+        // when Chromium failed to do so, preserving cursor/selection behavior.
+        if (document.contains(target) && document.activeElement !== target) {
+          target.focus({ preventScroll: true });
+        }
+      });
+    };
+
+    document.addEventListener('pointerdown', recoverKeyboardFocus, true);
+    return () => document.removeEventListener('pointerdown', recoverKeyboardFocus, true);
+  }, []);
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />

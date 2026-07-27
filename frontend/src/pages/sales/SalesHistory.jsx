@@ -63,7 +63,11 @@ export default function SalesHistory() {
               <tbody>
                 {(selected.items || []).map((it) => (
                   <tr key={it.id} className="border-b border-slate-50">
-                    <td className="py-1">{it.Product?.name}</td>
+                    <td className="py-1">
+                      <div>{it.item_name || it.Product?.name || (it.product_id ? `Product #${it.product_id}` : 'Manual item')}</div>
+                      {it.is_manual && <div className="text-[10px] uppercase tracking-wide text-amber-700">Manual bill item</div>}
+                      {Number(it.discount_amount || 0) > 0 && <div className="text-xs text-emerald-700">Discount: {formatMoney(it.discount_amount)}</div>}
+                    </td>
                     <td className="py-1 text-right">{it.quantity}</td>
                     <td className="py-1 text-right">{formatMoney(it.product_price)}</td>
                     <td className="py-1 text-right">{formatMoney(it.sub_total)}</td>
@@ -76,7 +80,11 @@ export default function SalesHistory() {
             </div>
             <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
               <DocumentActions type="sale" record={selected} allowReceipt />
-              <Button type="button" onClick={() => navigate(`/returns?sale_id=${selected.id}`)}>Create Customer Return</Button>
+              {(selected.items || []).some((item) => item.product_id) ? (
+                <Button type="button" onClick={() => navigate(`/returns?sale_id=${selected.id}`)}>Create Customer Return</Button>
+              ) : (
+                <span className="text-xs text-graphite-500">Manual bill items do not change stock and have no stock return.</span>
+              )}
             </div>
           </div>
         )}

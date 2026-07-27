@@ -83,7 +83,11 @@ const Sale = sequelize.define('Sale', {
 
 const SaleItem = sequelize.define('SaleItem', {
   sale_id: { type: DataTypes.INTEGER, allowNull: false },
-  product_id: { type: DataTypes.INTEGER, allowNull: false },
+  // Null product_id means this was a one-off/manual bill item and should not affect stock.
+  product_id: { type: DataTypes.INTEGER, allowNull: true },
+  item_name: { type: DataTypes.STRING, allowNull: true },
+  item_code: { type: DataTypes.STRING(100), allowNull: true },
+  is_manual: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   product_price: money,
   net_unit_price: money,
   tax_type: { type: DataTypes.ENUM('exclusive', 'inclusive', 'none'), defaultValue: 'none' },

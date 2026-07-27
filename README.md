@@ -19,6 +19,8 @@ forge.config.cjs
 - EAN-13/CODE128 barcode generation, scanning and label printing
 - Multi-warehouse stock, transfers and adjustments
 - Purchases, sales/POS checkout and cash-register shifts
+- Per-item percentage/fixed discounts with quick 5% and 10% actions
+- Quick/manual bill items for products not yet saved in the catalogue
 - Original-document sale and purchase returns with quantity protection
 - Quotations and held carts
 - Customers, suppliers, expenses and settings
@@ -160,6 +162,7 @@ A product can remain a single item or become a family with separately priced, st
 
 ## Release information
 
+- [POS_INPUT_DISCOUNT_QUICK_ITEM_RELEASE.md](POS_INPUT_DISCOUNT_QUICK_ITEM_RELEASE.md)
 - [DESKTOP_RELEASE_NOTES.md](DESKTOP_RELEASE_NOTES.md)
 - [VARIANT_RELEASE_NOTES.md](VARIANT_RELEASE_NOTES.md)
 - [VALIDATION.md](VALIDATION.md)

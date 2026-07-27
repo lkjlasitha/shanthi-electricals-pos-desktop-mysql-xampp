@@ -1,4 +1,15 @@
-# Desktop Release Notes — v1.3.0
+# Desktop Release Notes — v1.4.0
+
+
+## POS improvements in v1.4.0
+
+- Fixed POS number fields that could not be cleared and retyped naturally.
+- Prevented the barcode scanner field from stealing focus while another input is being edited.
+- Added system-wide Electron keyboard-focus recovery after native dialogs and window focus changes.
+- Added percentage and fixed discounts per sale item, including 5% and 10% quick actions.
+- Added one-off manual bill items with name, quantity and price.
+- Added automatic MySQL migration for manual sale-item columns and nullable product references.
+- Updated invoices, receipts, sales history, returns and product-sales reporting for manual items.
 
 ## Added
 

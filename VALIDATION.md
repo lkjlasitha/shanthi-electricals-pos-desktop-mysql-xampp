@@ -1,4 +1,4 @@
-# Validation report — Shanthi Electricals POS 1.3.0
+# Validation report — Shanthi Electricals POS 1.4.0
 
 ## Completed in this delivery environment
 
@@ -6,7 +6,8 @@
 - The TypeScript 5.8 parser accepted all 34 frontend JavaScript/JSX source files with no syntax diagnostics.
 - Every frontend relative import resolves to an existing local source file.
 - Every JSON file parses successfully.
-- Seven desktop service tests passed:
+- Thirty-eight focused tests passed: 34 dependency-free application/service tests plus 4 schema-migration tests using an isolated Sequelize type stub.
+- Desktop service coverage includes:
   - MySQL host/port normalization
   - Safe database and username validation
   - MySQL identifier quoting
@@ -15,6 +16,9 @@
   - XAMPP Windows path candidates
   - XAMPP `my.ini` server-port parsing
 - Desktop resources contain a valid PNG icon and multi-resolution Windows ICO file.
+- New sale-line tests cover percentage discounts, excessive fixed discounts, manual item persistence, required manual names and manual-item detection.
+- All 84 backend, Electron, test and script JavaScript/CommonJS files passed `node --check`.
+- All 34 frontend JavaScript/JSX files parsed with zero TypeScript syntax diagnostics.
 - No `.env`, MySQL data files, generated backups, `node_modules`, frontend build output or signing certificate is included in the source delivery.
 
 ## Desktop code review checks
@@ -28,6 +32,7 @@
 - The MySQL administrator password is not saved when dedicated-user mode succeeds.
 - Saved MySQL credentials and JWT secret use Electron `safeStorage` encryption.
 - Renderer windows use `nodeIntegration: false`, `contextIsolation: true`, `sandbox: true`, and narrow preload APIs.
+- The narrow desktop focus-recovery IPC restores renderer keyboard focus without exposing generic IPC or Node.js access.
 - Restore safety backups and logs are written under Electron's per-user application-data directory.
 - Desktop printing uses a hidden sandboxed window and a temporary HTML file that is removed after printing.
 - Reconfiguring the database removes only the local encrypted connection file and does not issue a database-drop command.

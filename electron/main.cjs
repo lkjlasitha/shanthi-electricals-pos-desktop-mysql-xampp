@@ -126,6 +126,11 @@ async function createMainWindow(port) {
 
   protectNavigation(mainWindow);
   mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.on('focus', () => {
+    // Re-focus Chromium after native dialogs or Windows task switching.
+    // Without this, mouse-driven buttons may work while inputs receive no keys.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.focus();
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -267,6 +272,14 @@ async function printHtml(payload = {}) {
 }
 
 function registerIpcHandlers() {
+  ipcMain.on('desktop:ensure-keyboard-focus', (event) => {
+    const targetWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!targetWindow || targetWindow.isDestroyed()) return;
+    if (targetWindow.isMinimized()) targetWindow.restore();
+    targetWindow.focus();
+    event.sender.focus();
+  });
+
   ipcMain.handle('desktop:get-info', async () => ({
     version: app.getVersion(),
     platform: process.platform,

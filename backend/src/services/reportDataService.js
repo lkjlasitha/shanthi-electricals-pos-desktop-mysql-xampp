@@ -95,6 +95,9 @@ async function productSalesReportData(query = {}) {
   if (query.warehouse_id) saleWhere.warehouse_id = query.warehouse_id;
   const limit = Math.min(Math.max(parseInt(query.limit || '200', 10) || 200, 1), 1000);
   const aggregates = await SaleItem.findAll({
+    // Manual one-off bill items are revenue, but are not catalogue products and
+    // should not distort the best-selling inventory report.
+    where: { product_id: { [Op.ne]: null } },
     include: [{ model: Sale, attributes: [], where: saleWhere, required: true }],
     attributes: [
       'product_id',

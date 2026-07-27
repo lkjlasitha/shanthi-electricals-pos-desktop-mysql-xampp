@@ -83,9 +83,40 @@ test('critical report columns are added independently of the model registry', as
   assert.ok(added.includes('sales.paid_amount'));
   assert.ok(added.includes('purchases.grand_total'));
   assert.ok(added.includes('sale_items.sub_total'));
+  assert.ok(added.includes('sale_items.item_name'));
+  assert.ok(added.includes('sale_items.item_code'));
+  assert.ok(added.includes('sale_items.is_manual'));
   assert.ok(added.includes('purchase_items.sub_total'));
   assert.ok(added.includes('expenses.amount'));
   assert.ok(added.includes('main_products.variant_config'));
   assert.ok(added.includes('products.variant_attributes'));
   assert.ok(added.includes('variation_products.main_product_id'));
+});
+
+test('existing sale_items product reference becomes nullable for manual bill items', async () => {
+  const tables = {
+    sale_items: { product_id: { allowNull: false } },
+  };
+  const changes = [];
+  const queryInterface = {
+    async describeTable(tableName) {
+      return { ...tables[tableName] };
+    },
+    async changeColumn(tableName, columnName, definition) {
+      tables[tableName][columnName] = { ...definition };
+      changes.push(`${tableName}.${columnName}`);
+    },
+  };
+  const fakeSequelize = {
+    modelManager: { models: [] },
+    models: {},
+    getQueryInterface: () => queryInterface,
+  };
+
+  const { makeSaleItemProductOptional } = loadMigratorWith(fakeSequelize);
+  const result = await makeSaleItemProductOptional({ verbose: false });
+
+  assert.deepEqual(changes, ['sale_items.product_id']);
+  assert.equal(tables.sale_items.product_id.allowNull, true);
+  assert.equal(result.length, 1);
 });

@@ -198,8 +198,8 @@ function itemRows(type, record, meta) {
     let total = Number(item.sub_total || 0);
     if (type === 'adjustment') total = null;
     return {
-      name: product.name || `Product #${item.product_id}`,
-      code: product.code || '',
+      name: item.item_name || product.name || (item.product_id ? `Product #${item.product_id}` : 'Manual item'),
+      code: item.item_code || product.code || '',
       quantity: Number(item.quantity || 0),
       unitValue,
       discount: Number(item.discount_amount || 0),
@@ -394,7 +394,7 @@ async function createA4DocumentPdf(type, record, settings) {
 async function createReceiptPdf(record, settings) {
   const width = 226.77; // 80 mm
   const rowCount = Math.max((record.items || []).length, 1);
-  const height = Math.max(500, 330 + rowCount * 38);
+  const height = Math.max(500, 330 + rowCount * 48);
   const doc = new PDFDocument({ size: [width, height], margin: 12, info: { Title: `Receipt ${record.reference_code || record.id}` } });
   const promise = collectPdf(doc);
   const contentWidth = width - 24;
@@ -415,10 +415,28 @@ async function createReceiptPdf(record, settings) {
   doc.moveDown(0.4);
 
   (record.items || []).forEach((item) => {
-    doc.font('Helvetica-Bold').fontSize(7.5).text(item.Product?.name || `Product #${item.product_id}`, { width: contentWidth });
-    doc.font('Helvetica').fontSize(7.2).text(`${Number(item.quantity || 0)} × ${money(item.product_price, settings)}`, 12, doc.y, { width: 120 });
-    doc.text(money(item.sub_total, settings), width - 92, doc.y - 8, { width: 80, align: 'right' });
-    doc.moveDown(0.45);
+    const product = item.Product || {};
+    const itemName = item.item_name || product.name || (item.product_id ? `Product #${item.product_id}` : 'Manual item');
+    const itemCode = item.item_code || product.code || '';
+    const discount = Number(item.discount_amount || 0);
+
+    doc.font('Helvetica-Bold').fontSize(7.5).text(itemName, { width: contentWidth });
+    if (itemCode) doc.font('Helvetica').fontSize(6.5).fillColor('#555555').text(itemCode, { width: contentWidth });
+    doc.fillColor('#333333');
+
+    const detailY = doc.y;
+    doc.font('Helvetica').fontSize(7.2).text(`${Number(item.quantity || 0)} × ${money(item.product_price, settings)}`, 12, detailY, { width: 125 });
+    doc.text(money(item.sub_total, settings), width - 92, detailY, { width: 80, align: 'right' });
+    doc.y = detailY + 10;
+
+    if (discount > 0) {
+      const discountY = doc.y;
+      doc.fontSize(6.8).fillColor('#555555').text('Item discount', 12, discountY, { width: 90 });
+      doc.text(`-${money(discount, settings)}`, width - 92, discountY, { width: 80, align: 'right' });
+      doc.fillColor('#333333');
+      doc.y = discountY + 9;
+    }
+    doc.moveDown(0.25);
   });
 
   doc.moveTo(12, doc.y).lineTo(width - 12, doc.y).dash(2, { space: 2 }).stroke().undash();

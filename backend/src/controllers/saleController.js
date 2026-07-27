@@ -5,6 +5,11 @@ const {
 } = require('../models/associations');
 const { asyncHandler, generateReferenceCode } = require('../utils/helpers');
 const { adjustStock } = require('../utils/stockService');
+const HttpError = require('../utils/httpError');
+const {
+  computeSaleLine,
+  nonNegativeNumber,
+} = require('../utils/saleLine');
 
 const includeGraph = [
   Customer, Warehouse,
@@ -34,61 +39,58 @@ const getOne = asyncHandler(async (req, res) => {
   res.json({ data: sale });
 });
 
-function computeLine(item) {
-  const qty = Number(item.quantity);
-  const price = Number(item.product_price);
-  let lineTotal = qty * price;
-
-  let discountAmount = 0;
-  if (item.discount_type === 'percentage') discountAmount = (lineTotal * Number(item.discount_value || 0)) / 100;
-  else if (item.discount_type === 'fixed') discountAmount = Number(item.discount_value || 0);
-
-  const taxedBase = lineTotal - discountAmount;
-  let taxAmount = 0;
-  if (item.tax_type === 'exclusive') taxAmount = (taxedBase * Number(item.tax_value || 0)) / 100;
-  else if (item.tax_type === 'inclusive') taxAmount = taxedBase - taxedBase / (1 + Number(item.tax_value || 0) / 100);
-
-  const netUnitPrice = price - discountAmount / (qty || 1) + (item.tax_type === 'exclusive' ? taxAmount / (qty || 1) : 0);
-  const subTotal = taxedBase + (item.tax_type === 'exclusive' ? taxAmount : 0);
-
-  return {
-    product_id: item.product_id,
-    product_price: price,
-    net_unit_price: netUnitPrice,
-    tax_type: item.tax_type || 'none',
-    tax_value: item.tax_value || 0,
-    tax_amount: taxAmount,
-    discount_type: item.discount_type || 'none',
-    discount_value: item.discount_value || 0,
-    discount_amount: discountAmount,
-    sale_unit_id: item.sale_unit_id || null,
-    quantity: qty,
-    sub_total: subTotal,
-  };
-}
-
-// This is the POS checkout endpoint.
-// body: { date, customer_id, warehouse_id, discount, shipping, tax_rate, payment_type,
-//         paid_amount, note, pos_register_id, items: [...] }
+// POS checkout supports both catalogue products and one-off manual bill items.
+// Manual items have product_id=null, keep an item_name snapshot, and never change stock.
 const create = asyncHandler(async (req, res) => {
-  const body = req.body;
-  if (!body.items || !body.items.length) return res.status(400).json({ message: 'Cart is empty' });
-  if (!body.warehouse_id) return res.status(400).json({ message: 'warehouse_id is required' });
+  const body = req.body || {};
+  if (!Array.isArray(body.items) || !body.items.length) throw new HttpError(400, 'Cart is empty');
+  if (!body.warehouse_id) throw new HttpError(422, 'Select a warehouse first.');
+  if (!body.customer_id) throw new HttpError(422, 'Select a customer first.');
 
-  const result = await sequelize.transaction(async (t) => {
+  const result = await sequelize.transaction(async (transaction) => {
+    const computedItems = body.items.map((item, index) => computeSaleLine(item, index));
+    const productIds = [...new Set(computedItems.map((item) => item.product_id).filter(Boolean))];
+
+    const products = productIds.length
+      ? await Product.findAll({
+        where: { id: { [Op.in]: productIds }, is_active: true },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      })
+      : [];
+
+    if (products.length !== productIds.length) {
+      throw new HttpError(422, 'One or more selected products no longer exists or is inactive. Refresh the POS and try again.');
+    }
+
+    const productsById = new Map(products.map((product) => [Number(product.id), product]));
     let subTotal = 0;
-    const computedItems = body.items.map((item) => {
-      const line = computeLine(item);
-      subTotal += line.sub_total;
-      return line;
-    });
 
-    const discount = Number(body.discount || 0);
-    const shipping = Number(body.shipping || 0);
-    const taxRate = Number(body.tax_rate || 0);
+    for (const item of computedItems) {
+      if (item.product_id) {
+        const product = productsById.get(Number(item.product_id));
+        // Save a historical name/code snapshot so old receipts remain understandable
+        // even when the catalogue entry is renamed later.
+        item.item_name = product.name;
+        item.item_code = product.code || null;
+        item.is_manual = false;
+      }
+      subTotal += item.sub_total;
+    }
+
+    const discount = nonNegativeNumber(body.discount || 0, 'Order discount');
+    const shipping = nonNegativeNumber(body.shipping || 0, 'Shipping');
+    const taxRate = nonNegativeNumber(body.tax_rate || 0, 'Order tax');
+    if (discount > subTotal) throw new HttpError(422, 'Order discount cannot exceed the sale subtotal.');
+
     const orderTaxAmount = ((subTotal - discount) * taxRate) / 100;
     const grandTotal = subTotal - discount + shipping + orderTaxAmount;
-    const paidAmount = Number(body.paid_amount != null ? body.paid_amount : grandTotal);
+    const paidAmount = body.paid_amount === null || body.paid_amount === undefined || body.paid_amount === ''
+      ? grandTotal
+      : nonNegativeNumber(body.paid_amount, 'Paid amount');
+    const receivedAmount = body.received_amount === null || body.received_amount === undefined || body.received_amount === ''
+      ? paidAmount
+      : nonNegativeNumber(body.received_amount, 'Received amount');
     const paymentStatus = paidAmount >= grandTotal ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid';
 
     const sale = await Sale.create({
@@ -101,24 +103,28 @@ const create = asyncHandler(async (req, res) => {
       discount,
       shipping,
       grand_total: grandTotal,
-      received_amount: body.received_amount || paidAmount,
+      received_amount: receivedAmount,
       paid_amount: paidAmount,
       payment_type: body.payment_type || 'cash',
       payment_status: paymentStatus,
       note: body.note || null,
       reference_code: generateReferenceCode('INV'),
       created_by: req.user ? req.user.id : null,
-    }, { transaction: t });
+    }, { transaction });
 
     for (const item of computedItems) {
-      await SaleItem.create({ ...item, sale_id: sale.id }, { transaction: t });
-      // Selling reduces warehouse stock; throws (422) if not enough stock available
-      await adjustStock({
-        productId: item.product_id,
-        warehouseId: body.warehouse_id,
-        delta: -item.quantity,
-        transaction: t,
-      });
+      await SaleItem.create({ ...item, sale_id: sale.id }, { transaction });
+
+      if (item.product_id) {
+        // Only catalogue products are inventory-controlled. Manual bill items are
+        // intentionally excluded from stock so a quick sale cannot create fake stock.
+        await adjustStock({
+          productId: item.product_id,
+          warehouseId: body.warehouse_id,
+          delta: -item.quantity,
+          transaction,
+        });
+      }
     }
 
     if (paidAmount > 0) {
@@ -126,9 +132,9 @@ const create = asyncHandler(async (req, res) => {
         sale_id: sale.id,
         amount: paidAmount,
         paying_method: body.payment_type || 'cash',
-        received_amount: body.received_amount || paidAmount,
+        received_amount: receivedAmount,
         paid_on: body.date || todayISO(),
-      }, { transaction: t });
+      }, { transaction });
     }
 
     return sale;

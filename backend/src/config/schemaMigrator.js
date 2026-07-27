@@ -16,6 +16,10 @@ const CRITICAL_COLUMNS = {
     paid_amount: { type: DataTypes.DOUBLE, allowNull: true },
   },
   sale_items: {
+    product_id: { type: DataTypes.INTEGER, allowNull: true },
+    item_name: { type: DataTypes.STRING, allowNull: true },
+    item_code: { type: DataTypes.STRING(100), allowNull: true },
+    is_manual: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
     quantity: { type: DataTypes.DOUBLE, allowNull: true },
     sub_total: { type: DataTypes.DOUBLE, allowNull: true },
   },
@@ -76,6 +80,7 @@ const ZERO_FILL_COLUMNS = new Set([
   'purchases.paid_amount',
   'purchases.received_amount',
   'sale_items.sub_total',
+  'sale_items.is_manual',
   'purchase_items.sub_total',
   'expenses.amount',
 ]);
@@ -157,6 +162,21 @@ async function addColumnAndConfirm(queryInterface, tableName, columnName, defini
     throw new Error(`Migration attempted to add ${tableName}.${columnName}, but MySQL did not report the column afterwards.`);
   }
   return true;
+}
+
+async function makeSaleItemProductOptional({ verbose = true } = {}) {
+  const queryInterface = sequelize.getQueryInterface();
+  const table = await describeIfExists(queryInterface, 'sale_items');
+  if (!table?.product_id || table.product_id.allowNull !== false) return [];
+
+  await queryInterface.changeColumn('sale_items', 'product_id', {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  });
+
+  const changed = ['made sale_items.product_id nullable for manual bill items'];
+  if (verbose) changed.forEach((change) => console.log(`[db:migrate] ${change}`));
+  return changed;
 }
 
 async function addCriticalColumns({ verbose = true } = {}) {
@@ -413,6 +433,7 @@ async function verifyCriticalColumns() {
 async function migrateSchema(options = {}) {
   const changes = [];
   changes.push(...await addCriticalColumns(options));
+  changes.push(...await makeSaleItemProductOptional(options));
   changes.push(...await addMissingColumns(options));
   changes.push(...await copyLegacyColumnValues(options));
   changes.push(...await rebuildDerivedTotals(options));
@@ -428,6 +449,7 @@ async function migrateSchema(options = {}) {
 module.exports = {
   migrateSchema,
   addCriticalColumns,
+  makeSaleItemProductOptional,
   addMissingColumns,
   copyLegacyColumnValues,
   rebuildDerivedTotals,

@@ -1,6 +1,6 @@
 {
   "name": "shanthi-electricals-backend",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Shanthi Electricals POS, invoicing, quotations, reports and warehouse backend",
   "main": "src/server.js",
   "type": "commonjs",

@@ -101,11 +101,13 @@ function transactionHtml(type, record, settings = {}, receipt = false) {
     : `<th>Item</th><th class="number">Qty</th><th class="number">${escapeHtml(meta.unitLabel)}</th><th class="number">Discount</th><th class="number">Tax</th><th class="number">Total</th>`;
   const itemRows = items.map((item) => {
     const product = item.Product || {};
+    const itemName = item.item_name || product.name || (item.product_id ? `Product #${item.product_id}` : 'Manual item');
+    const itemCode = item.item_code || product.code || '';
     if (type === 'adjustment') {
-      return `<tr><td><strong>${escapeHtml(product.name || `Product #${item.product_id}`)}</strong><br><span class="muted">${escapeHtml(product.code || '')}</span></td><td class="number">${escapeHtml(item.quantity)}</td><td class="number">${escapeHtml(human(item.type))}</td></tr>`;
+      return `<tr><td><strong>${escapeHtml(itemName)}</strong><br><span class="muted">${escapeHtml(itemCode)}</span></td><td class="number">${escapeHtml(item.quantity)}</td><td class="number">${escapeHtml(human(item.type))}</td></tr>`;
     }
     return `<tr>
-      <td><strong>${escapeHtml(product.name || `Product #${item.product_id}`)}</strong><br><span class="muted">${escapeHtml(product.code || '')}</span></td>
+      <td><strong>${escapeHtml(itemName)}</strong>${item.is_manual ? '<br><span class="muted">Manual bill item</span>' : ''}<br><span class="muted">${escapeHtml(itemCode)}</span></td>
       <td class="number">${escapeHtml(item.quantity)}</td>
       <td class="number">${escapeHtml(money(item[meta.unitKey], settings))}</td>
       <td class="number">${escapeHtml(money(item.discount_amount, settings))}</td>
@@ -160,10 +162,14 @@ function receiptHtml(record, settings = {}) {
   const line = (label, value, strong = false) => `<div class="receipt-total${strong ? ' strong' : ''}"><span>${escapeHtml(label)}</span><span>${escapeHtml(money(value, settings))}</span></div>`;
   const itemRows = items.map((item) => {
     const product = item.Product || {};
+    const itemName = item.item_name || product.name || (item.product_id ? `Product #${item.product_id}` : 'Manual item');
+    const itemCode = item.item_code || product.code || '';
+    const discount = Number(item.discount_amount || 0);
     return `<div class="receipt-item">
-      <div class="receipt-item-name">${escapeHtml(product.name || `Product #${item.product_id}`)}</div>
-      ${product.code ? `<div class="receipt-code">${escapeHtml(product.code)}</div>` : ''}
+      <div class="receipt-item-name">${escapeHtml(itemName)}</div>
+      ${itemCode ? `<div class="receipt-code">${escapeHtml(itemCode)}</div>` : ''}
       <div class="receipt-item-line"><span>${escapeHtml(item.quantity)} × ${escapeHtml(money(item.product_price, settings))}</span><strong>${escapeHtml(money(item.sub_total, settings))}</strong></div>
+      ${discount > 0 ? `<div class="receipt-item-line"><span>Item discount</span><span>-${escapeHtml(money(discount, settings))}</span></div>` : ''}
     </div>`;
   }).join('');
 

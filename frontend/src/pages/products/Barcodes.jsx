@@ -181,8 +181,8 @@ export default function Barcodes() {
             <h2 className="font-display font-semibold mb-4">Label design</h2>
             <Field label="Label size"><select className={inputClass} value={settings.size} onChange={(event) => updateSetting('size', event.target.value)}>{Object.entries(LABEL_SIZES).map(([key, size]) => <option key={key} value={key}>{size.name}</option>)}</select></Field>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Padding (mm)"><input type="number" min="0" max="5" step="0.2" className={inputClass} value={settings.padding} onChange={(event) => updateSetting('padding', Number(event.target.value))} /></Field>
-              <Field label="Gap (mm)"><input type="number" min="0" max="10" step="0.5" className={inputClass} value={settings.gap} onChange={(event) => updateSetting('gap', Number(event.target.value))} /></Field>
+              <Field label="Padding (mm)"><input type="number" min="0" max="5" step="0.2" className={inputClass} value={settings.padding} onChange={(event) => updateSetting('padding', event.target.value)} /></Field>
+              <Field label="Gap (mm)"><input type="number" min="0" max="10" step="0.5" className={inputClass} value={settings.gap} onChange={(event) => updateSetting('gap', event.target.value)} /></Field>
             </div>
             <div className="space-y-2 mb-4 text-sm">
               <label className="flex items-center gap-2"><input type="checkbox" checked={settings.showShop} onChange={(event) => updateSetting('showShop', event.target.checked)} />Show shop name</label>
@@ -191,10 +191,10 @@ export default function Barcodes() {
               <label className="flex items-center gap-2"><input type="checkbox" checked={settings.border} onChange={(event) => updateSetting('border', event.target.checked)} />Print cut border</label>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Shop font"><input type="number" min="6" max="20" className={inputClass} value={settings.shopFont} onChange={(event) => updateSetting('shopFont', Number(event.target.value))} /></Field>
-              <Field label="Name font"><input type="number" min="6" max="20" className={inputClass} value={settings.nameFont} onChange={(event) => updateSetting('nameFont', Number(event.target.value))} /></Field>
-              <Field label="Code font"><input type="number" min="6" max="20" className={inputClass} value={settings.codeFont} onChange={(event) => updateSetting('codeFont', Number(event.target.value))} /></Field>
-              <Field label="Price font"><input type="number" min="6" max="24" className={inputClass} value={settings.priceFont} onChange={(event) => updateSetting('priceFont', Number(event.target.value))} /></Field>
+              <Field label="Shop font"><input type="number" min="6" max="20" className={inputClass} value={settings.shopFont} onChange={(event) => updateSetting('shopFont', event.target.value)} /></Field>
+              <Field label="Name font"><input type="number" min="6" max="20" className={inputClass} value={settings.nameFont} onChange={(event) => updateSetting('nameFont', event.target.value)} /></Field>
+              <Field label="Code font"><input type="number" min="6" max="20" className={inputClass} value={settings.codeFont} onChange={(event) => updateSetting('codeFont', event.target.value)} /></Field>
+              <Field label="Price font"><input type="number" min="6" max="24" className={inputClass} value={settings.priceFont} onChange={(event) => updateSetting('priceFont', event.target.value)} /></Field>
             </div>
           </Card>
         </div>

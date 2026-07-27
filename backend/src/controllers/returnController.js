@@ -1,4 +1,4 @@
-const { QueryTypes } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const {
   SaleReturn, SaleReturnItem, Sale, SaleItem, Customer, Warehouse,
   PurchaseReturn, PurchaseReturnItem, Purchase, PurchaseItem, Supplier,
@@ -55,12 +55,14 @@ async function buildSaleReturnable(saleId, transaction) {
   if (!sale) throw new HttpError(404, 'Sale invoice not found.');
 
   const items = await SaleItem.findAll({
-    where: { sale_id: sale.id },
+    // Manual bill items do not represent inventory and therefore are excluded
+    // from stock returns. They remain visible on the original invoice.
+    where: { sale_id: sale.id, product_id: { [Op.ne]: null } },
     include: [Product],
     transaction,
     ...(transaction ? { lock: transaction.LOCK.UPDATE } : {}),
   });
-  if (!items.length) throw new HttpError(422, 'This sale has no line items that can be returned.');
+  if (!items.length) throw new HttpError(422, 'This sale has no stocked items that can be returned.');
   const source = aggregateSourceItems(items, 'product_price');
   const alreadyReturned = await returnedQuantities('sale', sale.id, transaction);
 
