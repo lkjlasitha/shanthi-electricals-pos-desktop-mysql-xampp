@@ -101,9 +101,33 @@ function computeSaleLine(item = {}, index = 0) {
   };
 }
 
+function applyProductFinancialSnapshot(line, product = {}) {
+  if (!line || !line.product_id) return {
+    ...line,
+    standard_price: null,
+    product_cost: null,
+    profit_amount: null,
+  };
+
+  const standardPrice = nonNegativeNumber(product.product_price || 0, 'Standard selling price');
+  const productCost = nonNegativeNumber(product.product_cost || 0, 'Product cost');
+  // sub_total includes exclusive tax and contains inclusive tax. Removing the
+  // line tax gives sale revenue excluding tax and after the item discount.
+  const revenueBeforeTax = Number(line.sub_total || 0) - Number(line.tax_amount || 0);
+  const profitAmount = revenueBeforeTax - productCost * Number(line.quantity || 0);
+
+  return {
+    ...line,
+    standard_price: standardPrice,
+    product_cost: productCost,
+    profit_amount: profitAmount,
+  };
+}
+
 module.exports = {
   computeSaleLine,
   isManualSaleItem,
   nonNegativeNumber,
   positiveNumber,
+  applyProductFinancialSnapshot,
 };

@@ -9,6 +9,7 @@ const HttpError = require('../utils/httpError');
 const {
   computeSaleLine,
   nonNegativeNumber,
+  applyProductFinancialSnapshot,
 } = require('../utils/saleLine');
 
 const includeGraph = [
@@ -74,6 +75,9 @@ const create = asyncHandler(async (req, res) => {
         item.item_name = product.name;
         item.item_code = product.code || null;
         item.is_manual = false;
+        Object.assign(item, applyProductFinancialSnapshot(item, product));
+      } else {
+        Object.assign(item, applyProductFinancialSnapshot(item));
       }
       subTotal += item.sub_total;
     }

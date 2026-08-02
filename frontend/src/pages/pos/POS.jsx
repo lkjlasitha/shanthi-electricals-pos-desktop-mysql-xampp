@@ -19,6 +19,16 @@ function isEditableElement(element) {
   return element.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName);
 }
 
+function standardUnitProfit(product = {}) {
+  const price = numericValue(product.product_price);
+  const cost = numericValue(product.product_cost);
+  const taxValue = numericValue(product.order_tax);
+  const revenueBeforeTax = product.tax_type === 'inclusive' && taxValue > 0
+    ? price / (1 + taxValue / 100)
+    : price;
+  return revenueBeforeTax - cost;
+}
+
 export default function POS() {
   const { user } = useAuth();
   const [warehouses, setWarehouses] = useState([]);
@@ -109,7 +119,11 @@ export default function POS() {
         item_name: product.name,
         item_code: product.code || '',
         quantity: '1',
+        // The cashier may change `price` for this bill only. The catalogue price
+        // and product cost are retained separately for reset and profit display.
         price: String(product.product_price ?? 0),
+        standard_price: String(product.product_price ?? 0),
+        cost_price: String(product.product_cost ?? 0),
         discount_value: '',
         discount_type: 'none',
         tax_value: String(product.order_tax || 0),
@@ -152,6 +166,8 @@ export default function POS() {
       item_code: '',
       quantity: quickItem.quantity,
       price: quickItem.price,
+      standard_price: '',
+      cost_price: '',
       discount_value: '',
       discount_type: 'none',
       tax_value: '0',
@@ -203,14 +219,42 @@ export default function POS() {
 
   const lineTaxAmount = (line) => {
     const taxable = lineBaseTotal(line) - lineDiscountAmount(line);
-    if (line.tax_type === 'exclusive') return (taxable * numericValue(line.tax_value)) / 100;
+    const taxValue = numericValue(line.tax_value);
+    if (line.tax_type === 'exclusive') return (taxable * taxValue) / 100;
+    if (line.tax_type === 'inclusive' && taxValue > 0) return taxable - taxable / (1 + taxValue / 100);
     return 0;
   };
 
-  const lineSubtotal = (line) => lineBaseTotal(line) - lineDiscountAmount(line) + lineTaxAmount(line);
+  const lineSubtotal = (line) => lineBaseTotal(line) - lineDiscountAmount(line)
+    + (line.tax_type === 'exclusive' ? lineTaxAmount(line) : 0);
+
+  // Product cost is stored excluding tax. Profit therefore uses sale revenue
+  // excluding line tax and after the cashier's item discount. Whole-bill
+  // discounts are intentionally shown separately because they are not tied to
+  // a single product line.
+  const lineRevenueBeforeTax = (line) => lineSubtotal(line) - lineTaxAmount(line);
+  const lineCostTotal = (line) => line.is_manual
+    ? null
+    : numericValue(line.quantity) * numericValue(line.cost_price);
+  const lineProfit = (line) => {
+    const costTotal = lineCostTotal(line);
+    return costTotal === null ? null : lineRevenueBeforeTax(line) - costTotal;
+  };
+  const lineUnitProfit = (line) => {
+    const quantity = numericValue(line.quantity);
+    const profit = lineProfit(line);
+    return profit === null || quantity <= 0 ? null : profit / quantity;
+  };
+  const isPriceOverridden = (line) => !line.is_manual
+    && Math.abs(numericValue(line.price) - numericValue(line.standard_price)) > 0.000001;
 
   const rawSubtotal = useMemo(() => cart.reduce((sum, line) => sum + lineBaseTotal(line), 0), [cart]);
   const itemDiscountTotal = useMemo(() => cart.reduce((sum, line) => sum + lineDiscountAmount(line), 0), [cart]);
+  const knownProductProfit = useMemo(() => cart.reduce((sum, line) => {
+    const profit = lineProfit(line);
+    return profit === null ? sum : sum + profit;
+  }, 0), [cart]);
+  const productLineCount = useMemo(() => cart.filter((line) => !line.is_manual).length, [cart]);
   const subTotal = useMemo(() => cart.reduce((sum, line) => sum + lineSubtotal(line), 0), [cart]);
   const orderDiscount = numericValue(discount);
   const orderTaxAmount = useMemo(
@@ -278,6 +322,9 @@ export default function POS() {
         item_name: line.item_name,
         item_code: line.item_code || null,
         quantity: Number(line.quantity),
+        // This is the temporary selling price for this transaction. The backend
+        // reads cost and standard price from the product record instead of
+        // trusting cashier-supplied financial data.
         product_price: Number(line.price),
         discount_type: line.discount_type,
         discount_value: numericValue(line.discount_value),
@@ -452,6 +499,9 @@ export default function POS() {
                     {product.total_stock ?? 0} in stock
                   </span>
                 </div>
+                <div className="mt-1 text-[10px] text-graphite-500">
+                  Cost {formatMoney(product.product_cost)} · Standard profit {formatMoney(standardUnitProfit(product))}
+                </div>
               </button>
             ))}
             {products.length === 0 && <div className="col-span-full text-center text-graphite-500 py-8">No products found.</div>}
@@ -475,6 +525,10 @@ export default function POS() {
           {cart.length === 0 && <p className="text-sm text-graphite-500 text-center py-8">Cart is empty. Tap a product, scan a barcode, or add a quick item.</p>}
           {cart.map((line) => {
             const discountAmount = lineDiscountAmount(line);
+            const profit = lineProfit(line);
+            const unitProfit = lineUnitProfit(line);
+            const priceOverridden = isPriceOverridden(line);
+            const belowCost = profit !== null && profit < 0;
             return (
               <div key={line.line_id} className="py-3 px-1">
                 <div className="flex justify-between items-start gap-2">
@@ -487,28 +541,75 @@ export default function POS() {
                   <button type="button" onClick={() => removeLine(line.line_id)} className="text-graphite-400 hover:text-red-600 text-xs">Remove</button>
                 </div>
 
-                <div className="flex items-center gap-2 mt-2">
-                  <input
-                    aria-label={`Quantity for ${line.item_name}`}
-                    type="number"
-                    min="0.01"
-                    step="any"
-                    className={inputClass + ' w-20 py-1'}
-                    value={line.quantity}
-                    onChange={(event) => updateLine(line.line_id, { quantity: event.target.value })}
-                  />
-                  <span className="text-xs text-graphite-500">×</span>
-                  <input
-                    aria-label={`Price for ${line.item_name}`}
-                    type="number"
-                    min="0"
-                    step="any"
-                    className={inputClass + ' w-24 py-1'}
-                    value={line.price}
-                    onChange={(event) => updateLine(line.line_id, { price: event.target.value })}
-                  />
-                  <span className="ml-auto text-sm font-medium">{formatMoney(lineSubtotal(line))}</span>
+                <div className="mt-2 grid grid-cols-[5rem_minmax(7rem,1fr)_auto] items-end gap-2">
+                  <label className="block">
+                    <span className="mb-1 block text-[11px] font-medium text-graphite-500">Qty</span>
+                    <input
+                      aria-label={`Quantity for ${line.item_name}`}
+                      type="number"
+                      min="0.01"
+                      step="any"
+                      className={inputClass + ' w-full py-1'}
+                      value={line.quantity}
+                      onChange={(event) => updateLine(line.line_id, { quantity: event.target.value })}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 flex items-center gap-1 text-[11px] font-medium text-graphite-500">
+                      Sale price for this bill
+                      {priceOverridden && (
+                        <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-blue-700">Changed</span>
+                      )}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        aria-label={`Sale price for ${line.item_name}`}
+                        type="number"
+                        min="0"
+                        step="any"
+                        className={inputClass + ' min-w-0 flex-1 py-1'}
+                        value={line.price}
+                        onChange={(event) => updateLine(line.line_id, { price: event.target.value })}
+                      />
+                      {priceOverridden && (
+                        <button
+                          type="button"
+                          onClick={() => updateLine(line.line_id, { price: line.standard_price })}
+                          className="whitespace-nowrap rounded border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-medium text-graphite-600 hover:border-copper-400"
+                          title={`Reset to standard price ${formatMoney(line.standard_price)}`}
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  </label>
+                  <span className="pb-2 text-sm font-medium">{formatMoney(lineSubtotal(line))}</span>
                 </div>
+
+                {!line.is_manual && (
+                  <div className={`mt-2 rounded-md border px-2.5 py-2 ${belowCost ? 'border-red-200 bg-red-50' : 'border-emerald-100 bg-emerald-50/60'}`}>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs sm:grid-cols-4">
+                      <div>
+                        <span className="block text-[10px] uppercase tracking-wide text-graphite-500">Standard</span>
+                        <strong className="text-graphite-800">{formatMoney(line.standard_price)}</strong>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] uppercase tracking-wide text-graphite-500">Cost / unit</span>
+                        <strong className="text-graphite-800">{formatMoney(line.cost_price)}</strong>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] uppercase tracking-wide text-graphite-500">Profit / unit</span>
+                        <strong className={belowCost ? 'text-red-700' : 'text-emerald-700'}>{formatMoney(unitProfit)}</strong>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] uppercase tracking-wide text-graphite-500">Line profit</span>
+                        <strong className={belowCost ? 'text-red-700' : 'text-emerald-700'}>{formatMoney(profit)}</strong>
+                      </div>
+                    </div>
+                    {belowCost && <p className="mt-1 text-[11px] font-medium text-red-700">Warning: this line is being sold below cost.</p>}
+                    <p className="mt-1 text-[10px] text-graphite-500">Profit includes the item discount and excludes tax. A whole-bill discount can reduce it further.</p>
+                  </div>
+                )}
 
                 <div className="mt-2 rounded-md bg-slate-50 p-2">
                   <div className="flex flex-wrap items-center gap-2">
@@ -560,6 +661,11 @@ export default function POS() {
           <div className="flex justify-between"><span>Items before discount</span><span>{formatMoney(rawSubtotal)}</span></div>
           {itemDiscountTotal > 0 && <div className="flex justify-between text-emerald-700"><span>Item discounts</span><span>-{formatMoney(itemDiscountTotal)}</span></div>}
           <div className="flex justify-between"><span>Items subtotal</span><span>{formatMoney(subTotal)}</span></div>
+          {productLineCount > 0 && (
+            <div className={`flex justify-between rounded px-2 py-1 font-medium ${knownProductProfit < 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+              <span>Known product profit*</span><span>{formatMoney(knownProductProfit)}</span>
+            </div>
+          )}
           <div className="flex justify-between items-center">
             <span>Whole-bill discount</span>
             <input type="number" min="0" step="any" className={inputClass + ' w-28 py-1'} value={discount} onChange={(event) => setDiscount(event.target.value)} />
@@ -571,6 +677,11 @@ export default function POS() {
           <div className="flex justify-between font-display font-semibold text-lg pt-1">
             <span>Total</span><span className="text-copper-600">{formatMoney(grandTotal)}</span>
           </div>
+          {productLineCount > 0 && (
+            <p className="text-[10px] leading-4 text-graphite-500">
+              *Known product profit is after item discounts and before the whole-bill discount. Manual quick items are excluded because their cost is unknown.
+            </p>
+          )}
 
           <select className={inputClass} value={paymentType} onChange={(event) => setPaymentType(event.target.value)}>
             <option value="cash">Cash</option>

@@ -88,7 +88,12 @@ const SaleItem = sequelize.define('SaleItem', {
   item_name: { type: DataTypes.STRING, allowNull: true },
   item_code: { type: DataTypes.STRING(100), allowNull: true },
   is_manual: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  // Financial snapshots make price overrides and historical margin auditable.
+  // product_price is the actual per-unit selling price used for this sale.
   product_price: money,
+  standard_price: { type: DataTypes.DOUBLE, allowNull: true },
+  product_cost: { type: DataTypes.DOUBLE, allowNull: true },
+  profit_amount: { type: DataTypes.DOUBLE, allowNull: true },
   net_unit_price: money,
   tax_type: { type: DataTypes.ENUM('exclusive', 'inclusive', 'none'), defaultValue: 'none' },
   tax_value: money,

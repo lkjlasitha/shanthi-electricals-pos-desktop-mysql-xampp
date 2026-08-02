@@ -86,6 +86,9 @@ test('critical report columns are added independently of the model registry', as
   assert.ok(added.includes('sale_items.item_name'));
   assert.ok(added.includes('sale_items.item_code'));
   assert.ok(added.includes('sale_items.is_manual'));
+  assert.ok(added.includes('sale_items.standard_price'));
+  assert.ok(added.includes('sale_items.product_cost'));
+  assert.ok(added.includes('sale_items.profit_amount'));
   assert.ok(added.includes('purchase_items.sub_total'));
   assert.ok(added.includes('expenses.amount'));
   assert.ok(added.includes('main_products.variant_config'));
