@@ -4,6 +4,7 @@ import { ProductsAPI, CategoriesAPI, BrandsAPI, UnitsAPI, WarehousesAPI } from '
 import { Button, PageHeader, Modal, Card, Field, inputClass } from '../../components/ui.jsx';
 import { formatMoney } from '../../utils/format';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useDialog } from '../../context/DialogContext.jsx';
 
 const emptyForm = {
   name: '', code: '', barcode_symbol: 'EAN13', product_category_id: '', brand_id: '',
@@ -27,6 +28,7 @@ function historyDate(value) {
 
 export default function Products() {
   const navigate = useNavigate();
+  const { confirm } = useDialog();
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('products.manage');
   const [products, setProducts] = useState([]);
@@ -195,7 +197,11 @@ export default function Products() {
   };
 
   const remove = async (product) => {
-    if (!window.confirm(`Deactivate "${product.name}"? It will be hidden from POS but past sales/purchases stay intact.`)) return;
+    const ok = await confirm(
+      `Deactivate "${product.name}"? It will be hidden from POS but past sales/purchases stay intact.`,
+      { title: 'Deactivate product', confirmLabel: 'Deactivate' }
+    );
+    if (!ok) return;
     await ProductsAPI.remove(product.id);
     loadProducts();
   };

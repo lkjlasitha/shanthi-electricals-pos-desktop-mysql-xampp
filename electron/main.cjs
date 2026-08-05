@@ -135,6 +135,39 @@ async function createMainWindow(port) {
     mainWindow = null;
   });
 
+  // The renderer freezing (e.g. a long synchronous loop, or something
+  // blocking the JS thread) is a different failure mode from a React error —
+  // the whole window stops responding to clicks/keys at the OS level. Detect
+  // it and offer a reload instead of leaving the user with a dead window.
+  let unresponsiveDialogOpen = false;
+  mainWindow.webContents.on('unresponsive', async () => {
+    if (unresponsiveDialogOpen || !mainWindow || mainWindow.isDestroyed()) return;
+    unresponsiveDialogOpen = true;
+    const response = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: 'Shanthi Electricals POS is not responding',
+      message: 'The application window has stopped responding.',
+      detail: 'You can wait for it to recover, or reload the screen. Reloading does not affect data already saved to the database.',
+      buttons: ['Wait', 'Reload'],
+      defaultId: 1,
+      cancelId: 0,
+    });
+    unresponsiveDialogOpen = false;
+    if (response.response === 1 && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.reload();
+    }
+  });
+
+  // A hard renderer crash (native crash, OOM, GPU issue) tears down the page
+  // entirely — nothing short of a reload brings the window back at all.
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    console.error('Renderer process gone:', details);
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (details.reason !== 'clean-exit') {
+      mainWindow.webContents.reload();
+    }
+  });
+
   await mainWindow.loadURL(`http://127.0.0.1:${port}`);
 }
 

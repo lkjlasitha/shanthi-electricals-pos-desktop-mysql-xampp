@@ -41,7 +41,11 @@ export const BaseUnitsAPI = crud('/base-units');
 export const UnitsAPI = crud('/units');
 export const WarehousesAPI = crud('/warehouses');
 export const SuppliersAPI = crud('/suppliers');
-export const CustomersAPI = crud('/customers');
+export const CustomersAPI = {
+  ...crud('/customers'),
+  profile: (id) => api.get(`/customers/${id}/profile`),
+  recordPayment: (id, data) => api.post(`/customers/${id}/payments`, data),
+};
 export const CurrenciesAPI = crud('/currencies');
 export const RolesAPI = crud('/roles');
 export const UsersAPI = crud('/users');
@@ -79,7 +83,9 @@ export const StockAPI = {
 
 export const QuotationsHoldsAPI = {
   listQuotations: () => api.get('/quotations'),
+  getQuotation: (id) => api.get(`/quotations/${id}`),
   createQuotation: (data) => api.post('/quotations', data),
+  updateQuotation: (id, data) => api.put(`/quotations/${id}`, data),
   listHolds: (warehouseId) => api.get('/holds', { params: { warehouse_id: warehouseId } }),
   createHold: (data) => api.post('/holds', data),
   deleteHold: (id) => api.delete(`/holds/${id}`),

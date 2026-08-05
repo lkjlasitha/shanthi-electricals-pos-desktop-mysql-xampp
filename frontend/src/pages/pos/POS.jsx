@@ -41,6 +41,11 @@ export default function POS() {
   const [cart, setCart] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState('');
+  const [customerAccount, setCustomerAccount] = useState(null);
+  const [accountLoading, setAccountLoading] = useState(false);
+  const [showAccountPayment, setShowAccountPayment] = useState(false);
+  const [accountPayment, setAccountPayment] = useState({ amount: '', payment_method: 'cash', reference: '' });
+  const [accountPaymentBusy, setAccountPaymentBusy] = useState(false);
   const [discount, setDiscount] = useState('0');
   const [taxRate, setTaxRate] = useState('0');
   const [paymentType, setPaymentType] = useState('cash');
@@ -73,9 +78,30 @@ export default function POS() {
   useEffect(() => {
     WarehousesAPI.list({ per_page: 100 }).then((res) => setWarehouses(res.data.data || res.data));
     CategoriesAPI.list({ per_page: 100 }).then((res) => setCategories(res.data.data || res.data));
-    CustomersAPI.list({ per_page: 200 }).then((res) => setCustomers(res.data.data || res.data));
+    CustomersAPI.list({ per_page: 200, status: 'active' }).then((res) => setCustomers(res.data.data || res.data));
     RegisterAPI.current().then((res) => setRegister(res.data.data)).catch(() => {});
   }, []);
+
+  const loadCustomerAccount = useCallback(async (selectedCustomerId) => {
+    if (!selectedCustomerId) { setCustomerAccount(null); return; }
+    setAccountLoading(true);
+    try {
+      const response = await CustomersAPI.profile(selectedCustomerId);
+      setCustomerAccount(response.data.data);
+    } catch (error) {
+      setCustomerAccount(null);
+      setMessage(error.response?.data?.message || 'Customer account details could not be loaded.');
+      setMessageType('error');
+    } finally {
+      setAccountLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setShowAccountPayment(false);
+    setAccountPayment({ amount: '', payment_method: 'cash', reference: '' });
+    loadCustomerAccount(customerId);
+  }, [customerId, loadCustomerAccount]);
 
   useEffect(() => {
     focusScanner({ force: true });
@@ -262,6 +288,15 @@ export default function POS() {
     [subTotal, orderDiscount, taxRate]
   );
   const grandTotal = Math.max(0, subTotal - orderDiscount + orderTaxAmount);
+  const enteredPayment = receivedAmount === ''
+    ? (paymentType === 'credit' ? 0 : grandTotal)
+    : numericValue(receivedAmount);
+  const amountApplied = Math.min(grandTotal, enteredPayment);
+  const saleCreditAmount = Math.max(0, grandTotal - amountApplied);
+  const customerSpendingPower = numericValue(customerAccount?.summary?.credit_balance)
+    + (customerAccount?.customer?.allow_credit ? numericValue(customerAccount?.summary?.available_credit) : 0);
+  const changeDue = paymentType === 'cash' ? Math.max(0, enteredPayment - grandTotal) : 0;
+  const effectiveKnownProfit = knownProductProfit - orderDiscount;
 
   const validateCart = () => {
     for (let index = 0; index < cart.length; index += 1) {
@@ -281,6 +316,11 @@ export default function POS() {
     if (orderDiscount > subTotal) return 'Order discount cannot exceed the sale subtotal.';
     if (receivedAmount !== '' && (!Number.isFinite(Number(receivedAmount)) || Number(receivedAmount) < 0)) {
       return 'Enter a valid received amount.';
+    }
+    if (saleCreditAmount > 0) {
+      if (saleCreditAmount > customerSpendingPower + 0.001) {
+        return `Only ${formatMoney(customerSpendingPower)} of customer credit is available.`;
+      }
     }
     return '';
   };
@@ -313,8 +353,8 @@ export default function POS() {
       discount: orderDiscount,
       tax_rate: numericValue(taxRate),
       payment_type: paymentType,
-      paid_amount: receivedAmount === '' ? grandTotal : Number(receivedAmount),
-      received_amount: receivedAmount === '' ? grandTotal : Number(receivedAmount),
+      paid_amount: amountApplied,
+      received_amount: enteredPayment,
       pos_register_id: register?.id || null,
       items: cart.map((line) => ({
         product_id: line.is_manual ? null : line.product?.id,
@@ -338,12 +378,42 @@ export default function POS() {
       setLastReceipt(response.data.data);
       resetCart();
       loadProducts();
+      loadCustomerAccount(customerId);
       setMessage('Sale completed. The scanner is ready for the next bill.');
       setMessageType('success');
       focusScanner({ force: true });
     } catch (error) {
       setMessage(error.response?.data?.message || 'Checkout failed');
       setMessageType('error');
+    }
+  };
+
+  const receiveAccountPayment = async (event) => {
+    event.preventDefault();
+    const amount = Number(accountPayment.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setMessage('Enter an account payment greater than zero.');
+      setMessageType('error');
+      return;
+    }
+    setAccountPaymentBusy(true);
+    try {
+      const response = await CustomersAPI.recordPayment(customerId, {
+        ...accountPayment,
+        amount,
+        date: todayISO(),
+        pos_register_id: register?.id || null,
+      });
+      setCustomerAccount(response.data.data);
+      setAccountPayment({ amount: '', payment_method: 'cash', reference: '' });
+      setShowAccountPayment(false);
+      setMessage('Customer account payment recorded and allocated to open bills.');
+      setMessageType('success');
+    } catch (error) {
+      setMessage(error.response?.data?.message || 'Account payment could not be recorded.');
+      setMessageType('error');
+    } finally {
+      setAccountPaymentBusy(false);
     }
   };
 
@@ -515,6 +585,24 @@ export default function POS() {
           {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name} ({customer.phone})</option>)}
         </select>
 
+        {customerId && (
+          <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+            {accountLoading && <div className="text-graphite-500">Loading customer account…</div>}
+            {!accountLoading && customerAccount && <>
+              <div className="grid grid-cols-3 gap-2">
+                <div><span className="block text-[10px] uppercase text-graphite-500">Amount due</span><strong className={numericValue(customerAccount.summary?.amount_due) > 0 ? 'text-red-700' : 'text-emerald-700'}>{formatMoney(customerAccount.summary?.amount_due)}</strong></div>
+                <div><span className="block text-[10px] uppercase text-graphite-500">Overdue</span><strong className={numericValue(customerAccount.summary?.overdue) > 0 ? 'text-red-700' : ''}>{formatMoney(customerAccount.summary?.overdue)}</strong></div>
+                <div><span className="block text-[10px] uppercase text-graphite-500">Credit available</span><strong className="text-blue-700">{customerAccount.customer?.allow_credit ? formatMoney(customerAccount.summary?.available_credit) : 'Not enabled'}</strong></div>
+              </div>
+              <div className="mt-2 flex items-center justify-between border-t border-slate-200 pt-2">
+                <span>{customerAccount.metrics?.invoice_count || 0} bills · Last purchase {customerAccount.metrics?.last_purchase_date || '—'}</span>
+                <button type="button" className="font-medium text-copper-700 hover:underline" onClick={() => setShowAccountPayment((value) => !value)}>Receive payment</button>
+              </div>
+              {showAccountPayment && <form onSubmit={receiveAccountPayment} className="mt-2 grid grid-cols-2 gap-2 rounded border border-slate-200 bg-white p-2"><input aria-label="Customer account payment amount" required type="number" min="0.01" step="any" className={inputClass + ' py-1 text-xs'} placeholder="Amount" value={accountPayment.amount} onChange={(event) => setAccountPayment({ ...accountPayment, amount: event.target.value })} /><select aria-label="Customer account payment method" className={inputClass + ' py-1 text-xs'} value={accountPayment.payment_method} onChange={(event) => setAccountPayment({ ...accountPayment, payment_method: event.target.value })}><option value="cash">Cash</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select><input aria-label="Customer account payment reference" className={inputClass + ' py-1 text-xs'} placeholder="Reference (optional)" value={accountPayment.reference} onChange={(event) => setAccountPayment({ ...accountPayment, reference: event.target.value })} /><Button type="submit" className="justify-center py-1 text-xs" disabled={accountPaymentBusy}>{accountPaymentBusy ? 'Recording…' : 'Record'}</Button></form>}
+            </>}
+          </div>
+        )}
+
         {message && (
           <div className={`mb-3 rounded-md border px-3 py-2 text-sm ${messageType === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-100 bg-red-50 text-red-600'}`}>
             {message}
@@ -662,8 +750,8 @@ export default function POS() {
           {itemDiscountTotal > 0 && <div className="flex justify-between text-emerald-700"><span>Item discounts</span><span>-{formatMoney(itemDiscountTotal)}</span></div>}
           <div className="flex justify-between"><span>Items subtotal</span><span>{formatMoney(subTotal)}</span></div>
           {productLineCount > 0 && (
-            <div className={`flex justify-between rounded px-2 py-1 font-medium ${knownProductProfit < 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
-              <span>Known product profit*</span><span>{formatMoney(knownProductProfit)}</span>
+            <div className={`flex justify-between rounded px-2 py-1 font-medium ${effectiveKnownProfit < 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+              <span>Estimated bill profit*</span><span>{formatMoney(effectiveKnownProfit)}</span>
             </div>
           )}
           <div className="flex justify-between items-center">
@@ -679,7 +767,7 @@ export default function POS() {
           </div>
           {productLineCount > 0 && (
             <p className="text-[10px] leading-4 text-graphite-500">
-              *Known product profit is after item discounts and before the whole-bill discount. Manual quick items are excluded because their cost is unknown.
+              *Estimated profit includes item and whole-bill discounts. Manual quick items are excluded because their cost is unknown.
             </p>
           )}
 
@@ -694,10 +782,12 @@ export default function POS() {
             min="0"
             step="any"
             className={inputClass}
-            placeholder={`Amount received (default: ${grandTotal.toFixed(2)})`}
+            placeholder={paymentType === 'credit' ? 'Deposit received (default: 0.00)' : `Amount received (default: ${grandTotal.toFixed(2)})`}
             value={receivedAmount}
             onChange={(event) => setReceivedAmount(event.target.value)}
           />
+          {saleCreditAmount > 0 && <div className="flex justify-between rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800"><span>Added to customer account</span><span>{formatMoney(saleCreditAmount)}</span></div>}
+          {changeDue > 0 && <div className="flex justify-between rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-800"><span>Change due</span><span>{formatMoney(changeDue)}</span></div>}
 
           <div className="flex gap-2 pt-1">
             <Button type="button" variant="secondary" className="flex-1 justify-center" onClick={holdCart}>Hold</Button>

@@ -3,6 +3,7 @@ import { DocumentsAPI, SettingsAPI } from '../api/endpoints';
 import { saveResponseBlob } from '../utils/download';
 import { printTransaction } from '../utils/printDocuments';
 import { Button } from './ui.jsx';
+import { useDialog } from '../context/DialogContext.jsx';
 
 let settingsCache = null;
 let settingsPromise = null;
@@ -43,6 +44,7 @@ async function requestErrorMessage(error) {
 }
 
 export default function DocumentActions({ type, record, allowReceipt = false, compact = false, onError }) {
+  const { alert: showAlert } = useDialog();
   const [busy, setBusy] = useState('');
   if (!record) return null;
 
@@ -53,7 +55,7 @@ export default function DocumentActions({ type, record, allowReceipt = false, co
     } catch (error) {
       const message = await requestErrorMessage(error);
       if (onError) onError(message);
-      else window.alert(message);
+      else showAlert(message, { title: 'Action failed' });
     } finally {
       setBusy('');
     }

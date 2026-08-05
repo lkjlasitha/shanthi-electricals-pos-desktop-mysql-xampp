@@ -5,6 +5,7 @@ import { saveResponseBlob } from '../utils/download';
 import { getDocumentSettings } from '../components/DocumentActions.jsx';
 import { todayISO } from '../utils/format';
 import { PRINT_STORAGE_KEYS } from '../utils/printDocuments';
+import { useDialog } from '../context/DialogContext.jsx';
 
 const FIELDS = [
   { key: 'business_name', label: 'Business name' },
@@ -23,6 +24,7 @@ const FIELDS = [
 ];
 
 export default function Settings() {
+  const { confirm } = useDialog();
   const [values, setValues] = useState({});
   const [saved, setSaved] = useState(false);
   const [message, setMessage] = useState('');
@@ -110,7 +112,11 @@ export default function Settings() {
     setError('');
     if (!restoreFile) return setError('Choose a Shanthi Electricals .xlsx backup file.');
     if (restoreConfirmation !== 'RESTORE') return setError('Type RESTORE exactly to confirm the full database replacement.');
-    if (!window.confirm('This will replace the current database data with the selected backup. A safety backup will be created on the server first. Continue?')) return;
+    const ok = await confirm(
+      'This will replace the current database data with the selected backup. A safety backup will be created on the server first. Continue?',
+      { title: 'Restore database', confirmLabel: 'Restore' }
+    );
+    if (!ok) return;
 
     setBackupBusy(true);
     try {

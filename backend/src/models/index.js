@@ -75,6 +75,7 @@ const Currency = sequelize.define('Currency', {
 
 const Customer = sequelize.define('Customer', {
   name: { type: DataTypes.STRING, allowNull: false },
+  customer_code: { type: DataTypes.STRING(50), allowNull: true, unique: true },
   email: { type: DataTypes.STRING, allowNull: true },
   phone: { type: DataTypes.STRING, allowNull: false }, // Sri Lankan mobile/landline
   country: { type: DataTypes.STRING, defaultValue: 'Sri Lanka' },
@@ -82,6 +83,11 @@ const Customer = sequelize.define('Customer', {
   address: { type: DataTypes.TEXT, allowNull: true },
   tax_number: { type: DataTypes.STRING, allowNull: true }, // customer's VAT/TIN if a registered business
   opening_balance: { type: DataTypes.DOUBLE, defaultValue: 0 }, // credit balance for shop-account customers
+  allow_credit: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  credit_limit: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
+  payment_terms_days: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+  status: { type: DataTypes.ENUM('active', 'inactive'), allowNull: false, defaultValue: 'active' },
+  notes: { type: DataTypes.TEXT, allowNull: true },
 }, { tableName: 'customers' });
 
 const Supplier = sequelize.define('Supplier', {

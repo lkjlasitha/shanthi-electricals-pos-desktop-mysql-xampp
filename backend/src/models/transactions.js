@@ -64,6 +64,7 @@ const PurchaseReturnItem = sequelize.define('PurchaseReturnItem', {
    ============================================================ */
 const Sale = sequelize.define('Sale', {
   date: { type: DataTypes.DATEONLY, allowNull: false },
+  due_date: { type: DataTypes.DATEONLY, allowNull: true },
   customer_id: { type: DataTypes.INTEGER, allowNull: false },
   warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
   pos_register_id: { type: DataTypes.INTEGER, allowNull: true },
@@ -108,6 +109,7 @@ const SaleItem = sequelize.define('SaleItem', {
 
 const SalesPayment = sequelize.define('SalesPayment', {
   sale_id: { type: DataTypes.INTEGER, allowNull: false },
+  customer_account_payment_id: { type: DataTypes.INTEGER, allowNull: true },
   amount: money,
   paying_method: { type: DataTypes.ENUM('cash', 'card', 'bank_transfer', 'credit'), defaultValue: 'cash' },
   received_amount: money,
@@ -182,7 +184,9 @@ const Quotation = sequelize.define('Quotation', {
   tax_amount: money,
   discount: money,
   shipping: money,
+  sub_total: money,
   grand_total: money,
+  profit_amount: money,
   note: { type: DataTypes.TEXT, allowNull: true },
   reference_code: { type: DataTypes.STRING, allowNull: true },
   status: { type: DataTypes.ENUM('sent', 'converted', 'expired'), defaultValue: 'sent' },
@@ -192,11 +196,44 @@ const QuotationItem = sequelize.define('QuotationItem', {
   quotation_id: { type: DataTypes.INTEGER, allowNull: false },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   product_price: money,
+  standard_price: { type: DataTypes.DOUBLE, allowNull: true },
+  product_cost: { type: DataTypes.DOUBLE, allowNull: true },
+  profit_amount: { type: DataTypes.DOUBLE, allowNull: true },
   quantity: { type: DataTypes.DOUBLE, allowNull: false },
+  discount_type: { type: DataTypes.ENUM('percentage', 'fixed', 'none'), defaultValue: 'none' },
+  discount_value: money,
   discount_amount: money,
+  tax_type: { type: DataTypes.ENUM('exclusive', 'inclusive', 'none'), defaultValue: 'none' },
+  tax_value: money,
   tax_amount: money,
   sub_total: money,
 }, { tableName: 'quotation_items' });
+
+// One receipt can settle several older invoices. The receipt is retained as a
+// single auditable customer-account event while linked SalesPayment rows show
+// how much was allocated to each individual bill.
+const CustomerAccountPayment = sequelize.define('CustomerAccountPayment', {
+  customer_id: { type: DataTypes.INTEGER, allowNull: false },
+  date: { type: DataTypes.DATEONLY, allowNull: false },
+  amount: { type: DataTypes.DOUBLE, allowNull: false },
+  unallocated_amount: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
+  payment_method: {
+    type: DataTypes.ENUM('cash', 'card', 'bank_transfer'),
+    allowNull: false,
+    defaultValue: 'cash',
+  },
+  reference: { type: DataTypes.STRING, allowNull: true },
+  receipt_code: { type: DataTypes.STRING, allowNull: false, unique: true },
+  note: { type: DataTypes.TEXT, allowNull: true },
+  pos_register_id: { type: DataTypes.INTEGER, allowNull: true },
+  created_by: { type: DataTypes.INTEGER, allowNull: true },
+}, {
+  tableName: 'customer_account_payments',
+  indexes: [
+    { fields: ['customer_id', 'date'] },
+    { fields: ['pos_register_id'] },
+  ],
+});
 
 const Hold = sequelize.define('Hold', {
   warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -263,5 +300,5 @@ module.exports = {
   Sale, SaleItem, SalesPayment, SaleReturn, SaleReturnItem,
   Transfer, TransferItem, Adjustment, AdjustmentItem,
   Quotation, QuotationItem, Hold, HoldItem,
-  POSRegister, ExpenseCategory, Expense, CouponCode,
+  CustomerAccountPayment, POSRegister, ExpenseCategory, Expense, CouponCode,
 };

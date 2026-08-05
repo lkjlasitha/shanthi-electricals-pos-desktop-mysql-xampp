@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Button, PageHeader, Modal, Card, Field, inputClass } from './ui.jsx';
+import { useDialog } from '../context/DialogContext.jsx';
 
 /**
  * Renders a searchable table + add/edit modal for a simple resource.
@@ -13,6 +14,7 @@ import { Button, PageHeader, Modal, Card, Field, inputClass } from './ui.jsx';
  *  - hasPermission: fn from AuthContext
  */
 export default function CrudPage({ title, subtitle, api, columns, fields, hasPermission, permission }) {
+  const { confirm, alert: showAlert } = useDialog();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -67,12 +69,18 @@ export default function CrudPage({ title, subtitle, api, columns, fields, hasPer
   };
 
   const remove = async (row) => {
-    if (!window.confirm(`Delete "${row.name || row.title || row.code || row.id}"? This cannot be undone.`)) return;
+    const ok = await confirm(`Delete "${row.name || row.title || row.code || row.id}"? This cannot be undone.`, {
+      title: 'Delete record',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     try {
       await api.remove(row.id);
       load();
     } catch (e) {
-      alert(e.response?.data?.message || 'Delete failed — it may be used elsewhere in the system.');
+      showAlert(e.response?.data?.message || 'Delete failed — it may be used elsewhere in the system.', {
+        title: 'Delete failed',
+      });
     }
   };
 

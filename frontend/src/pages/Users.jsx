@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { UsersAPI, RolesAPI, WarehousesAPI } from '../api/endpoints';
 import { Button, PageHeader, Modal, Card, Field, inputClass } from '../components/ui.jsx';
+import { useDialog } from '../context/DialogContext.jsx';
 
 const emptyForm = { name: '', email: '', password: '', phone: '', role_id: '', warehouse_id: '' };
 
 export default function Users() {
+  const { confirm } = useDialog();
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
@@ -47,7 +49,8 @@ export default function Users() {
   };
 
   const remove = async (u) => {
-    if (!window.confirm(`Remove staff account "${u.name}"?`)) return;
+    const ok = await confirm(`Remove staff account "${u.name}"?`, { title: 'Remove staff', confirmLabel: 'Remove' });
+    if (!ok) return;
     await UsersAPI.remove(u.id);
     load();
   };

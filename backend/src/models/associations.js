@@ -16,7 +16,7 @@ const {
   Sale, SaleItem, SalesPayment, SaleReturn, SaleReturnItem,
   Transfer, TransferItem, Adjustment, AdjustmentItem,
   Quotation, QuotationItem, Hold, HoldItem,
-  POSRegister, ExpenseCategory, Expense, CouponCode,
+  CustomerAccountPayment, POSRegister, ExpenseCategory, Expense, CouponCode,
 } = txModels;
 
 /* ---------------- Auth / RBAC ---------------- */
@@ -92,8 +92,13 @@ SaleItem.belongsTo(Sale, { foreignKey: 'sale_id' });
 SaleItem.belongsTo(Product, { foreignKey: 'product_id' });
 Sale.hasMany(SalesPayment, { foreignKey: 'sale_id', onDelete: 'CASCADE', as: 'payments' });
 SalesPayment.belongsTo(Sale, { foreignKey: 'sale_id' });
+Customer.hasMany(CustomerAccountPayment, { foreignKey: 'customer_id', onDelete: 'RESTRICT', as: 'accountPayments' });
+CustomerAccountPayment.belongsTo(Customer, { foreignKey: 'customer_id' });
+CustomerAccountPayment.hasMany(SalesPayment, { foreignKey: 'customer_account_payment_id', as: 'allocations' });
+SalesPayment.belongsTo(CustomerAccountPayment, { foreignKey: 'customer_account_payment_id', as: 'accountPayment' });
 
 SaleReturn.belongsTo(Sale, { foreignKey: 'sale_id' });
+Sale.hasMany(SaleReturn, { foreignKey: 'sale_id', as: 'returns' });
 SaleReturn.belongsTo(Customer, { foreignKey: 'customer_id' });
 SaleReturn.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 SaleReturn.hasMany(SaleReturnItem, { foreignKey: 'sale_return_id', onDelete: 'CASCADE', as: 'items' });
@@ -126,6 +131,10 @@ User.hasMany(POSRegister, { foreignKey: 'user_id' });
 POSRegister.belongsTo(User, { foreignKey: 'user_id' });
 Warehouse.hasMany(POSRegister, { foreignKey: 'warehouse_id' });
 POSRegister.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
+POSRegister.hasMany(CustomerAccountPayment, { foreignKey: 'pos_register_id', as: 'customerPayments' });
+CustomerAccountPayment.belongsTo(POSRegister, { foreignKey: 'pos_register_id' });
+User.hasMany(CustomerAccountPayment, { foreignKey: 'created_by', as: 'customerPaymentsCreated' });
+CustomerAccountPayment.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
 
 ExpenseCategory.hasMany(Expense, { foreignKey: 'expense_category_id' });
 Expense.belongsTo(ExpenseCategory, { foreignKey: 'expense_category_id' });

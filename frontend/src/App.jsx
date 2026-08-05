@@ -16,6 +16,7 @@ import CategoriesBrands from './pages/masterdata/CategoriesBrands.jsx';
 import Units from './pages/masterdata/Units.jsx';
 import Warehouses from './pages/Warehouses.jsx';
 import Customers from './pages/Customers.jsx';
+import CustomerProfile from './pages/CustomerProfile.jsx';
 import Suppliers from './pages/Suppliers.jsx';
 import Expenses from './pages/Expenses.jsx';
 import Reports from './pages/Reports.jsx';
@@ -77,6 +78,7 @@ export default function App() {
         <Route path="/masterdata/units" element={<Units />} />
         <Route path="/warehouses" element={<Warehouses />} />
         <Route path="/customers" element={<Customers />} />
+        <Route path="/customers/:id" element={<CustomerProfile />} />
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/expenses" element={<Expenses />} />
         <Route path="/reports" element={<Reports />} />
