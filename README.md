@@ -2,8 +2,6 @@
 
 A complete point-of-sale, inventory, purchasing, quotation, return and reporting system for Shanthi Electricals. The project supports both browser development and a Windows desktop installer while keeping **MySQL/MariaDB** as the database.
 
-Current release: **v1.6.0** — full-page quotation pricing/profit workspace and customer credit-account pipeline. See `RELEASE_V1.6.0.md` and `QA_V1.6.0.md`.
-
 ## Project layout
 
 ```text

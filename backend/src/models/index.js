@@ -75,19 +75,20 @@ const Currency = sequelize.define('Currency', {
 
 const Customer = sequelize.define('Customer', {
   name: { type: DataTypes.STRING, allowNull: false },
-  customer_code: { type: DataTypes.STRING(50), allowNull: true, unique: true },
   email: { type: DataTypes.STRING, allowNull: true },
   phone: { type: DataTypes.STRING, allowNull: false }, // Sri Lankan mobile/landline
   country: { type: DataTypes.STRING, defaultValue: 'Sri Lanka' },
   city: { type: DataTypes.STRING, allowNull: true },
   address: { type: DataTypes.TEXT, allowNull: true },
   tax_number: { type: DataTypes.STRING, allowNull: true }, // customer's VAT/TIN if a registered business
-  opening_balance: { type: DataTypes.DOUBLE, defaultValue: 0 }, // credit balance for shop-account customers
-  allow_credit: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
-  credit_limit: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
-  payment_terms_days: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-  status: { type: DataTypes.ENUM('active', 'inactive'), allowNull: false, defaultValue: 'active' },
-  notes: { type: DataTypes.TEXT, allowNull: true },
+  opening_balance: { type: DataTypes.DOUBLE, defaultValue: 0 }, // pre-existing debt not tied to any invoice
+  // Advanced customer pipeline: track regulars, wholesale accounts and
+  // customers who buy on credit ("give part of the money"), plus an optional
+  // credit ceiling so the cashier is warned before a regular over-extends.
+  customer_type: { type: DataTypes.ENUM('retail', 'wholesale', 'credit'), defaultValue: 'retail' },
+  credit_limit: { type: DataTypes.DOUBLE, allowNull: true, defaultValue: 0 }, // 0/NULL = no limit enforced
+  is_active: { type: DataTypes.BOOLEAN, defaultValue: true },
+  notes: { type: DataTypes.TEXT, allowNull: true }, // free-form notes shown on the customer profile
 }, { tableName: 'customers' });
 
 const Supplier = sequelize.define('Supplier', {

@@ -4,6 +4,7 @@ const {
   SaleReturn, PurchaseReturn, Warehouse, sequelize,
 } = require('../models/associations');
 const { asyncHandler } = require('../utils/helpers');
+const { getReceivablesTotals } = require('../services/customerLedgerService');
 
 function sriLankaDate(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -162,6 +163,9 @@ const summary = asyncHandler(async (req, res) => {
 
   const netMonthSales = asNumber(monthSales) - asNumber(monthSaleReturns);
   const netMonthPurchases = asNumber(monthPurchases) - asNumber(monthPurchaseReturns);
+  const receivables = await getReceivablesTotals().catch(() => ({
+    outstanding_receivables: 0, outstanding_from_sales: 0, outstanding_from_opening_balance: 0, customers_with_open_sales: 0,
+  }));
 
   res.json({
     data: {
@@ -188,6 +192,10 @@ const summary = asyncHandler(async (req, res) => {
       top_customers: topCustomers.map((row) => ({ ...row, grand_total: asNumber(row.grand_total), invoice_count: Number(row.invoice_count || 0) })),
       low_stock_products: lowStockProducts,
       recent_sales: recentSales,
+      outstanding_receivables: receivables.outstanding_receivables,
+      outstanding_from_sales: receivables.outstanding_from_sales,
+      outstanding_from_opening_balance: receivables.outstanding_from_opening_balance,
+      customers_with_open_sales: receivables.customers_with_open_sales,
     },
   });
 });

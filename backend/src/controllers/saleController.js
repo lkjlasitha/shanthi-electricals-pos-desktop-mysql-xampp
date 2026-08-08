@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
-const { todayISO, addDaysISO, isValidISODate } = require('../utils/date');
+const { todayISO } = require('../utils/date');
 const {
-  Sale, SaleItem, SaleReturn, Product, Customer, Warehouse, SalesPayment, CustomerAccountPayment, sequelize,
+  Sale, SaleItem, Product, Customer, Warehouse, SalesPayment, sequelize,
 } = require('../models/associations');
 const { asyncHandler, generateReferenceCode } = require('../utils/helpers');
 const { adjustStock } = require('../utils/stockService');
@@ -11,9 +11,7 @@ const {
   nonNegativeNumber,
   applyProductFinancialSnapshot,
 } = require('../utils/saleLine');
-const { loadAccountSnapshot } = require('../services/customerAccountService');
-
-const PAYMENT_METHODS = new Set(['cash', 'card', 'bank_transfer', 'credit']);
+// HttpError is already imported above for the create() handler; addPayment reuses it.
 
 const includeGraph = [
   Customer, Warehouse,
@@ -28,6 +26,7 @@ const list = asyncHandler(async (req, res) => {
   if (req.query.warehouse_id) where.warehouse_id = req.query.warehouse_id;
   if (req.query.customer_id) where.customer_id = req.query.customer_id;
   if (req.query.reference_code) where.reference_code = { [Op.like]: `%${req.query.reference_code}%` };
+  if (req.query.payment_status) where.payment_status = req.query.payment_status;
   if (req.query.from_date && req.query.to_date) where.date = { [Op.between]: [req.query.from_date, req.query.to_date] };
 
   const { rows, count } = await Sale.findAndCountAll({
@@ -52,10 +51,6 @@ const create = asyncHandler(async (req, res) => {
   if (!body.customer_id) throw new HttpError(422, 'Select a customer first.');
 
   const result = await sequelize.transaction(async (transaction) => {
-    const customer = await Customer.findByPk(body.customer_id, { transaction, lock: transaction.LOCK.UPDATE });
-    if (!customer || customer.status === 'inactive') {
-      throw new HttpError(422, 'The selected customer does not exist or is inactive.');
-    }
     const computedItems = body.items.map((item, index) => computeSaleLine(item, index));
     const productIds = [...new Set(computedItems.map((item) => item.product_id).filter(Boolean))];
 
@@ -96,35 +91,16 @@ const create = asyncHandler(async (req, res) => {
 
     const orderTaxAmount = ((subTotal - discount) * taxRate) / 100;
     const grandTotal = subTotal - discount + shipping + orderTaxAmount;
-    const requestedPaidAmount = body.paid_amount === null || body.paid_amount === undefined || body.paid_amount === ''
+    const paidAmount = body.paid_amount === null || body.paid_amount === undefined || body.paid_amount === ''
       ? grandTotal
       : nonNegativeNumber(body.paid_amount, 'Paid amount');
-    const paidAmount = Math.min(requestedPaidAmount, grandTotal);
     const receivedAmount = body.received_amount === null || body.received_amount === undefined || body.received_amount === ''
-      ? requestedPaidAmount
+      ? paidAmount
       : nonNegativeNumber(body.received_amount, 'Received amount');
-    if (receivedAmount < paidAmount) throw new HttpError(422, 'Received amount cannot be less than the amount applied to the sale.');
     const paymentStatus = paidAmount >= grandTotal ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid';
-    const unpaidAmount = grandTotal - paidAmount;
-    let accountSnapshot = null;
-    if (unpaidAmount > 0) {
-      accountSnapshot = await loadAccountSnapshot(customer, { transaction });
-      const newUncoveredCredit = Math.max(0, unpaidAmount - Number(accountSnapshot.summary.credit_balance || 0));
-      if (newUncoveredCredit > 0 && !customer.allow_credit) {
-        throw new HttpError(422, 'This customer is not approved for credit sales. Enable credit on the customer profile or collect the full amount.');
-      }
-      const projectedOutstanding = Math.max(0, Number(accountSnapshot.summary.outstanding || 0)) + newUncoveredCredit;
-      if (projectedOutstanding > Number(customer.credit_limit || 0) + 0.001) {
-        throw new HttpError(422, `This sale would exceed the customer's credit limit. Available credit: ${accountSnapshot.summary.available_credit.toFixed(2)}.`);
-      }
-    }
-    const saleDate = body.date || todayISO();
-    if (!isValidISODate(saleDate)) throw new HttpError(422, 'Sale date must be a valid date.');
-    const paymentType = PAYMENT_METHODS.has(body.payment_type) ? body.payment_type : 'cash';
 
     const sale = await Sale.create({
-      date: saleDate,
-      due_date: unpaidAmount > 0 ? addDaysISO(saleDate, customer.payment_terms_days) : null,
+      date: body.date || todayISO(),
       customer_id: body.customer_id,
       warehouse_id: body.warehouse_id,
       pos_register_id: body.pos_register_id || null,
@@ -135,7 +111,7 @@ const create = asyncHandler(async (req, res) => {
       grand_total: grandTotal,
       received_amount: receivedAmount,
       paid_amount: paidAmount,
-      payment_type: paymentType,
+      payment_type: body.payment_type || 'cash',
       payment_status: paymentStatus,
       note: body.note || null,
       reference_code: generateReferenceCode('INV'),
@@ -161,49 +137,10 @@ const create = asyncHandler(async (req, res) => {
       await SalesPayment.create({
         sale_id: sale.id,
         amount: paidAmount,
-        paying_method: paymentType,
+        paying_method: body.payment_type || 'cash',
         received_amount: receivedAmount,
-        paid_on: saleDate,
+        paid_on: body.date || todayISO(),
       }, { transaction });
-    }
-
-    // Apply any genuine advance/customer credit after the current tender. An
-    // unallocated amount only exists after all older invoices were settled, so
-    // using it here keeps both the invoice status and account balance aligned.
-    let remainingAfterTender = unpaidAmount;
-    let accountCreditApplied = 0;
-    if (remainingAfterTender > 0 && Number(accountSnapshot?.summary?.credit_balance || 0) > 0) {
-      const creditReceipts = await CustomerAccountPayment.findAll({
-        where: { customer_id: customer.id, unallocated_amount: { [Op.gt]: 0 } },
-        order: [['date', 'ASC'], ['id', 'ASC']],
-        transaction,
-        lock: transaction.LOCK.UPDATE,
-      });
-      for (const receipt of creditReceipts) {
-        if (remainingAfterTender <= 0) break;
-        const allocated = Math.min(remainingAfterTender, Number(receipt.unallocated_amount || 0));
-        if (allocated <= 0) continue;
-        await SalesPayment.create({
-          sale_id: sale.id,
-          customer_account_payment_id: receipt.id,
-          amount: allocated,
-          paying_method: receipt.payment_method,
-          received_amount: allocated,
-          reference: receipt.receipt_code,
-          note: 'Applied from existing customer account credit',
-          paid_on: saleDate,
-        }, { transaction });
-        await receipt.update({ unallocated_amount: Number(receipt.unallocated_amount) - allocated }, { transaction });
-        remainingAfterTender -= allocated;
-        accountCreditApplied += allocated;
-      }
-      if (accountCreditApplied > 0) {
-        await sale.update({
-          paid_amount: paidAmount + accountCreditApplied,
-          payment_status: remainingAfterTender <= 0.001 ? 'paid' : 'partial',
-          due_date: remainingAfterTender <= 0.001 ? null : sale.due_date,
-        }, { transaction });
-      }
     }
 
     return sale;
@@ -215,48 +152,44 @@ const create = asyncHandler(async (req, res) => {
 
 // Record an additional payment against a partially-paid / credit sale
 const addPayment = asyncHandler(async (req, res) => {
-  const amount = Number(req.body.amount);
-  if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(422, 'A positive payment amount is required.');
-  const payingMethod = PAYMENT_METHODS.has(req.body.paying_method) ? req.body.paying_method : 'cash';
-  const paidOn = req.body.paid_on || todayISO();
-  if (!isValidISODate(paidOn)) throw new HttpError(422, 'Payment date must be a valid date.');
-
-  const saleId = await sequelize.transaction(async (transaction) => {
+  const result = await sequelize.transaction(async (transaction) => {
+    // Lock the row so two cashiers recording a payment for the same credit
+    // sale at the same moment cannot both read a stale paid_amount and
+    // silently overwrite each other's payment.
     const sale = await Sale.findByPk(req.params.id, { transaction, lock: transaction.LOCK.UPDATE });
     if (!sale) throw new HttpError(404, 'Sale not found');
-    const [payments, returned] = await Promise.all([
-      SalesPayment.sum('amount', { where: { sale_id: sale.id }, transaction }),
-      SaleReturn.sum('grand_total', { where: { sale_id: sale.id }, transaction }),
-    ]);
-    const outstanding = Math.max(0, Number(sale.grand_total || 0) - Number(payments || 0) - Number(returned || 0));
-    if (outstanding <= 0) throw new HttpError(409, 'This sale is already fully settled.');
-    if (amount > outstanding + 0.001) {
-      throw new HttpError(422, `Payment cannot exceed the outstanding amount of ${outstanding.toFixed(2)}. Use the customer profile to retain an excess amount as account credit.`);
+    if (sale.payment_status === 'paid') {
+      throw new HttpError(422, 'This sale is already fully paid.');
     }
-    const receivedAmount = req.body.received_amount === undefined || req.body.received_amount === ''
-      ? amount
-      : nonNegativeNumber(req.body.received_amount, 'Received amount');
-    if (receivedAmount < amount) throw new HttpError(422, 'Received amount cannot be less than the payment amount.');
+
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new HttpError(422, 'Enter a valid payment amount greater than zero.');
+    }
+
+    const outstanding = Number(sale.grand_total) - Number(sale.paid_amount);
+    if (amount - outstanding > 0.005) {
+      throw new HttpError(422, `Payment of ${amount.toFixed(2)} is more than the outstanding balance of ${outstanding.toFixed(2)}.`);
+    }
 
     await SalesPayment.create({
       sale_id: sale.id,
       amount,
-      paying_method: payingMethod,
-      received_amount: receivedAmount,
+      paying_method: req.body.paying_method || 'cash',
+      received_amount: req.body.received_amount || amount,
       reference: req.body.reference || null,
       note: req.body.note || null,
-      paid_on: paidOn,
+      paid_on: req.body.paid_on || todayISO(),
     }, { transaction });
 
-    const newPaidTotal = Number(payments || 0) + amount;
-    await sale.update({
-      paid_amount: newPaidTotal,
-      payment_status: newPaidTotal + Number(returned || 0) >= Number(sale.grand_total) ? 'paid' : 'partial',
-    }, { transaction });
-    return sale.id;
+    const newPaidTotal = Number(sale.paid_amount) + amount;
+    sale.paid_amount = newPaidTotal;
+    sale.payment_status = newPaidTotal >= Number(sale.grand_total) - 0.005 ? 'paid' : 'partial';
+    await sale.save({ transaction });
+    return sale;
   });
 
-  const full = await Sale.findByPk(saleId, { include: includeGraph });
+  const full = await Sale.findByPk(result.id, { include: includeGraph });
   res.json({ data: full });
 });
 

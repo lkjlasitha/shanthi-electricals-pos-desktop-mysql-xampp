@@ -3,6 +3,7 @@ import {
   Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
   Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
+import { Link } from 'react-router-dom';
 import { DashboardAPI } from '../api/endpoints';
 import { Card, PageHeader } from '../components/ui.jsx';
 import { formatMoney, formatDate } from '../utils/format';
@@ -91,6 +92,20 @@ export default function Dashboard() {
         <Stat label="Month purchases" value={formatMoney(data.month_purchases)} />
         <Stat label="Estimated month result" value={formatMoney(data.month_profit_estimate)} note="Net sales − net purchases − expenses" accent />
         <Stat label="Stock cost value" value={formatMoney(data.stock_value)} note="Current quantity × current cost" />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <Link to="/customers/receivables" className="block">
+          <Card className="p-5 min-w-0 border-amber-300 hover:border-copper-500 transition-colors">
+            <div className="text-xs uppercase tracking-wide text-graphite-500 font-medium mb-1">Money owed to the shop</div>
+            <div className="font-display text-2xl font-semibold truncate text-amber-700">{formatMoney(data.outstanding_receivables)}</div>
+            <div className="text-xs text-graphite-500 mt-1">
+              {data.customers_with_open_sales || 0} customer{data.customers_with_open_sales === 1 ? '' : 's'} with unpaid bills — tap to view →
+            </div>
+          </Card>
+        </Link>
+        <Stat label="Outstanding on invoices" value={formatMoney(data.outstanding_from_sales)} note="Credit / partial sales not yet fully paid" />
+        <Stat label="Outstanding opening balances" value={formatMoney(data.outstanding_from_opening_balance)} note="Pre-existing dues not tied to a bill" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">

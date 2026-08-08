@@ -43,8 +43,11 @@ export const WarehousesAPI = crud('/warehouses');
 export const SuppliersAPI = crud('/suppliers');
 export const CustomersAPI = {
   ...crud('/customers'),
+  // Same rows as list(), but with due/credit balances pre-computed server-side.
+  listWithBalances: (params) => api.get('/customers/balances', { params }),
+  receivables: () => api.get('/customers/receivables'),
   profile: (id) => api.get(`/customers/${id}/profile`),
-  recordPayment: (id, data) => api.post(`/customers/${id}/payments`, data),
+  addPayment: (id, data) => api.post(`/customers/${id}/payments`, data),
 };
 export const CurrenciesAPI = crud('/currencies');
 export const RolesAPI = crud('/roles');
@@ -82,10 +85,12 @@ export const StockAPI = {
 };
 
 export const QuotationsHoldsAPI = {
-  listQuotations: () => api.get('/quotations'),
+  listQuotations: (params) => api.get('/quotations', { params }),
   getQuotation: (id) => api.get(`/quotations/${id}`),
   createQuotation: (data) => api.post('/quotations', data),
   updateQuotation: (id, data) => api.put(`/quotations/${id}`, data),
+  convertQuotation: (id, data) => api.post(`/quotations/${id}/convert`, data),
+  setQuotationStatus: (id, status) => api.post(`/quotations/${id}/status`, { status }),
   listHolds: (warehouseId) => api.get('/holds', { params: { warehouse_id: warehouseId } }),
   createHold: (data) => api.post('/holds', data),
   deleteHold: (id) => api.delete(`/holds/${id}`),

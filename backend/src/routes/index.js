@@ -9,6 +9,7 @@ router.use('/sales', require('./sales'));
 router.use('/register', require('./register'));
 router.use('/documents', require('./documents'));
 router.use('/backup', require('./backup'));
+router.use('/', require('./customers'));
 router.use('/', require('./masterData'));
 router.use('/', require('./returns'));
 router.use('/', require('./stockMovements'));

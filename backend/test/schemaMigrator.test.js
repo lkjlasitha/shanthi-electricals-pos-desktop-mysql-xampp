@@ -54,10 +54,6 @@ test('critical report columns are added independently of the model registry', as
     sales: { id: {} },
     purchases: { id: {} },
     sale_items: { id: {} },
-    sales_payments: { id: {} },
-    quotation_items: { id: {} },
-    quotations: { id: {} },
-    customers: { id: {} },
     purchase_items: { id: {} },
     main_products: { id: {} },
     products: { id: {} },
@@ -93,11 +89,6 @@ test('critical report columns are added independently of the model registry', as
   assert.ok(added.includes('sale_items.standard_price'));
   assert.ok(added.includes('sale_items.product_cost'));
   assert.ok(added.includes('sale_items.profit_amount'));
-  assert.ok(added.includes('sales_payments.customer_account_payment_id'));
-  assert.ok(added.includes('quotation_items.product_cost'));
-  assert.ok(added.includes('quotation_items.profit_amount'));
-  assert.ok(added.includes('quotations.sub_total'));
-  assert.ok(added.includes('customers.credit_limit'));
   assert.ok(added.includes('purchase_items.sub_total'));
   assert.ok(added.includes('expenses.amount'));
   assert.ok(added.includes('main_products.variant_config'));

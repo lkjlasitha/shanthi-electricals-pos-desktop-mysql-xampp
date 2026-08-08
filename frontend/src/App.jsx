@@ -12,11 +12,13 @@ import Transfers from './pages/stock/Transfers.jsx';
 import Adjustments from './pages/stock/Adjustments.jsx';
 import Returns from './pages/Returns.jsx';
 import Quotations from './pages/Quotations.jsx';
+import QuotationBuilder from './pages/quotations/QuotationBuilder.jsx';
 import CategoriesBrands from './pages/masterdata/CategoriesBrands.jsx';
 import Units from './pages/masterdata/Units.jsx';
 import Warehouses from './pages/Warehouses.jsx';
 import Customers from './pages/Customers.jsx';
-import CustomerProfile from './pages/CustomerProfile.jsx';
+import CustomerProfile from './pages/customers/CustomerProfile.jsx';
+import Receivables from './pages/customers/Receivables.jsx';
 import Suppliers from './pages/Suppliers.jsx';
 import Expenses from './pages/Expenses.jsx';
 import Reports from './pages/Reports.jsx';
@@ -74,10 +76,13 @@ export default function App() {
         <Route path="/stock/adjustments" element={<Adjustments />} />
         <Route path="/returns" element={<Returns />} />
         <Route path="/quotations" element={<Quotations />} />
+        <Route path="/quotations/new" element={<QuotationBuilder />} />
+        <Route path="/quotations/:id" element={<QuotationBuilder />} />
         <Route path="/masterdata/categories" element={<CategoriesBrands />} />
         <Route path="/masterdata/units" element={<Units />} />
         <Route path="/warehouses" element={<Warehouses />} />
         <Route path="/customers" element={<Customers />} />
+        <Route path="/customers/receivables" element={<Receivables />} />
         <Route path="/customers/:id" element={<CustomerProfile />} />
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/expenses" element={<Expenses />} />

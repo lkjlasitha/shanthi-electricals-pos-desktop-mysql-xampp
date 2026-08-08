@@ -6,7 +6,6 @@ const sequelize = require('./db');
 // Sequelize version exposes sequelize.models.
 const CRITICAL_COLUMNS = {
   sales: {
-    due_date: { type: DataTypes.DATEONLY, allowNull: true },
     grand_total: { type: DataTypes.DOUBLE, allowNull: true },
     received_amount: { type: DataTypes.DOUBLE, allowNull: true },
     paid_amount: { type: DataTypes.DOUBLE, allowNull: true },
@@ -26,30 +25,6 @@ const CRITICAL_COLUMNS = {
     profit_amount: { type: DataTypes.DOUBLE, allowNull: true },
     quantity: { type: DataTypes.DOUBLE, allowNull: true },
     sub_total: { type: DataTypes.DOUBLE, allowNull: true },
-  },
-  sales_payments: {
-    customer_account_payment_id: { type: DataTypes.INTEGER, allowNull: true },
-  },
-  quotation_items: {
-    standard_price: { type: DataTypes.DOUBLE, allowNull: true },
-    product_cost: { type: DataTypes.DOUBLE, allowNull: true },
-    profit_amount: { type: DataTypes.DOUBLE, allowNull: true },
-    discount_type: { type: DataTypes.ENUM('percentage', 'fixed', 'none'), allowNull: true, defaultValue: 'none' },
-    discount_value: { type: DataTypes.DOUBLE, allowNull: true, defaultValue: 0 },
-    tax_type: { type: DataTypes.ENUM('exclusive', 'inclusive', 'none'), allowNull: true, defaultValue: 'none' },
-    tax_value: { type: DataTypes.DOUBLE, allowNull: true, defaultValue: 0 },
-  },
-  quotations: {
-    sub_total: { type: DataTypes.DOUBLE, allowNull: true, defaultValue: 0 },
-    profit_amount: { type: DataTypes.DOUBLE, allowNull: true, defaultValue: 0 },
-  },
-  customers: {
-    customer_code: { type: DataTypes.STRING(50), allowNull: true },
-    allow_credit: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
-    credit_limit: { type: DataTypes.DOUBLE, allowNull: true, defaultValue: 0 },
-    payment_terms_days: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0 },
-    status: { type: DataTypes.ENUM('active', 'inactive'), allowNull: true, defaultValue: 'active' },
-    notes: { type: DataTypes.TEXT, allowNull: true },
   },
   purchase_items: {
     quantity: { type: DataTypes.DOUBLE, allowNull: true },
