@@ -1,4 +1,4 @@
-const { Op } = require('sequelize');
+const { Op } = require('../database/mongoOrm');
 const { asyncHandler } = require('./helpers');
 
 /**
@@ -17,8 +17,10 @@ function crudFactory(model, options = {}) {
   const { searchFields = [], include = [], order = [['id', 'DESC']] } = options;
 
   const list = asyncHandler(async (req, res) => {
-    const page = parseInt(req.query.page || '1', 10);
-    const perPage = Math.min(parseInt(req.query.per_page || '20', 10), 200);
+    const requestedPage = Number(req.query.page || 1);
+    const requestedPerPage = Number(req.query.per_page || 20);
+    const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const perPage = Number.isInteger(requestedPerPage) && requestedPerPage > 0 ? Math.min(requestedPerPage, 200) : 20;
     const where = {};
 
     if (req.query.search && searchFields.length) {

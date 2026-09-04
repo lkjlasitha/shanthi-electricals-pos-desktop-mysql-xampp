@@ -1,4 +1,4 @@
-const { DataTypes } = require('sequelize');
+const { DataTypes } = require('../database/mongoOrm');
 const sequelize = require('../config/db');
 
 /* ============================================================

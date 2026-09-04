@@ -1,4 +1,5 @@
 const { Setting } = require('../models/associations');
+const { getDefaultLogoDataUri } = require('../assets/defaultLogo');
 
 const DEFAULT_SETTINGS = Object.freeze({
   business_name: 'Shanthi Electricals',
@@ -6,6 +7,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   business_email: '',
   business_address: 'Sri Lanka',
   business_tax_number: '',
+  business_tagline: 'Three Phase, Single Phase, Motor Winding, and AC/DC Spare Parts\nWater Pumps, Generators, Electrical Appliance Repair',
+  business_logo: getDefaultLogoDataUri(),
   default_currency: 'LKR',
   currency_symbol: 'Rs.',
   default_tax_rate: '0',

@@ -96,6 +96,12 @@ function computeSaleLine(item = {}, index = 0) {
     discount_value: discountValue,
     discount_amount: discountAmount,
     sale_unit_id: item.sale_unit_id || null,
+    // Quantity as typed by the cashier in the chosen display unit (e.g. "5"
+    // for 5 feet of wire). Purely a display snapshot; `quantity` above is
+    // always already converted to the product's stock unit for pricing/stock.
+    unit_quantity: item.unit_quantity === undefined || item.unit_quantity === null || item.unit_quantity === ''
+      ? null
+      : Number(item.unit_quantity),
     quantity,
     sub_total: subTotal,
   };

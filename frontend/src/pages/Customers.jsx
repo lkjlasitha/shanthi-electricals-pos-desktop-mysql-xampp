@@ -9,7 +9,7 @@ import { useDialog } from '../context/DialogContext.jsx';
 
 const EMPTY_FORM = {
   name: '', phone: '', email: '', city: '', address: '', tax_number: '',
-  opening_balance: '0', customer_type: 'retail', credit_limit: '', is_active: true, notes: '',
+  opening_balance: '0', customer_type: 'retail', credit_limit: '', payment_terms_days: '30', is_active: true, notes: '',
 };
 
 const TYPE_STYLES = {
@@ -52,7 +52,8 @@ export default function Customers() {
       name: customer.name || '', phone: customer.phone || '', email: customer.email || '',
       city: customer.city || '', address: customer.address || '', tax_number: customer.tax_number || '',
       opening_balance: String(customer.opening_balance ?? 0), customer_type: customer.customer_type || 'retail',
-      credit_limit: customer.credit_limit ? String(customer.credit_limit) : '', is_active: customer.is_active !== false, notes: customer.notes || '',
+      credit_limit: customer.credit_limit ? String(customer.credit_limit) : '', payment_terms_days: String(customer.payment_terms_days ?? 30),
+      is_active: customer.is_active !== false, notes: customer.notes || '',
     });
     setFormError('');
     setModalOpen(true);
@@ -68,6 +69,7 @@ export default function Customers() {
       ...form,
       opening_balance: Number(form.opening_balance || 0),
       credit_limit: form.credit_limit === '' ? null : Number(form.credit_limit),
+      payment_terms_days: Number(form.payment_terms_days || 0),
     };
     try {
       if (editing) await CustomersAPI.update(editing.id, payload);
@@ -179,6 +181,9 @@ export default function Customers() {
             </Field>
             <Field label="Credit limit" hint="Leave blank for no limit. You'll be warned at checkout if exceeded.">
               <input type="number" step="any" className={inputClass} value={form.credit_limit} onChange={(e) => setForm({ ...form, credit_limit: e.target.value })} />
+            </Field>
+            <Field label="Payment terms (days)" hint="Used to calculate due dates for part-paid and credit bills.">
+              <input type="number" min="0" max="3650" step="1" className={inputClass} value={form.payment_terms_days} onChange={(e) => setForm({ ...form, payment_terms_days: e.target.value })} />
             </Field>
           </div>
           <Field label="Notes"><textarea className={inputClass} rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>

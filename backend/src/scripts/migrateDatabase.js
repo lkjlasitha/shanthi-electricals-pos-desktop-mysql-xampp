@@ -9,10 +9,10 @@ async function run() {
   try {
     await ensureDatabaseExists();
     await sequelize.authenticate();
-    // Create tables that do not exist, but do not destructively alter existing ones.
+    // Create collections and indexes without dropping application data.
     await sequelize.sync({ alter: false });
     await migrateSchema({ verbose: true });
-    console.log(`Database migration successful: ${config.host}:${config.port}/${config.database}`);
+    console.log(`MongoDB migration successful: ${config.database}`);
   } catch (error) {
     console.error(`Database migration failed: ${formatDatabaseError(error)}`);
     process.exitCode = 1;

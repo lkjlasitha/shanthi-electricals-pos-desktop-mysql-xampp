@@ -9,6 +9,7 @@ import { useDialog } from '../context/DialogContext.jsx';
 
 const FIELDS = [
   { key: 'business_name', label: 'Business name' },
+  { key: 'business_tagline', label: 'Tagline (shown under the business name on documents; one line per line)', textarea: true },
   { key: 'business_phone', label: 'Business phone' },
   { key: 'business_email', label: 'Business email' },
   { key: 'business_address', label: 'Business address', textarea: true },
@@ -23,6 +24,17 @@ const FIELDS = [
   { key: 'date_format', label: 'Date format', readOnly: true },
 ];
 
+const MAX_LOGO_BYTES = 1.5 * 1024 * 1024; // 1.5MB source image cap, before base64 encoding
+
+function readFileAsDataUri(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Could not read the file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function Settings() {
   const { confirm } = useDialog();
   const [values, setValues] = useState({});
@@ -36,7 +48,9 @@ export default function Settings() {
   const [printers, setPrinters] = useState([]);
   const [receiptPrinter, setReceiptPrinter] = useState(() => localStorage.getItem(PRINT_STORAGE_KEYS.receiptPrinter) || '');
   const [silentReceipt, setSilentReceipt] = useState(() => localStorage.getItem(PRINT_STORAGE_KEYS.silentReceipt) === 'true');
+  const [logoError, setLogoError] = useState('');
   const fileRef = useRef(null);
+  const logoFileRef = useRef(null);
 
   useEffect(() => {
     SettingsAPI.getAll().then((r) => setValues(r.data.data));
@@ -77,6 +91,32 @@ export default function Settings() {
     } finally {
       setBackupBusy(false);
     }
+  };
+
+  const handleLogoChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setLogoError('');
+    if (!/^image\/(png|jpe?g)$/.test(file.type)) {
+      setLogoError('Please choose a PNG or JPG image.');
+      return;
+    }
+    if (file.size > MAX_LOGO_BYTES) {
+      setLogoError('That image is too large. Please choose one under 1.5MB.');
+      return;
+    }
+    try {
+      const dataUri = await readFileAsDataUri(file);
+      setValues((previous) => ({ ...previous, business_logo: dataUri }));
+    } catch {
+      setLogoError('The image could not be read. Please try another file.');
+    } finally {
+      if (logoFileRef.current) logoFileRef.current.value = '';
+    }
+  };
+
+  const removeLogo = () => {
+    setValues((previous) => ({ ...previous, business_logo: '' }));
   };
 
   const savePrinterSettings = () => {
@@ -157,6 +197,22 @@ export default function Settings() {
           <h2 className="font-display font-semibold text-lg mb-4">Business and document details</h2>
           <form onSubmit={submit}>
             {saved && <div className="mb-3 text-sm text-green-700 bg-green-50 border border-green-100 rounded-md px-3 py-2">Settings saved.</div>}
+            <Field label="Business logo" hint="Shown on quotations, invoices and receipts. PNG with a transparent background looks best.">
+              <div className="flex items-center gap-3">
+                <div className="flex h-16 w-16 items-center justify-center rounded-md border border-slate-200 bg-slate-50 p-1.5">
+                  {values.business_logo
+                    ? <img src={values.business_logo} alt="Business logo" className="max-h-full max-w-full object-contain" />
+                    : <span className="text-[10px] text-graphite-400">No logo</span>}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <input ref={logoFileRef} type="file" accept="image/png,image/jpeg" className="text-xs" onChange={handleLogoChange} />
+                  {values.business_logo && (
+                    <button type="button" onClick={removeLogo} className="self-start text-xs text-red-600 hover:underline">Remove logo</button>
+                  )}
+                </div>
+              </div>
+              {logoError && <p className="mt-1 text-xs text-red-600">{logoError}</p>}
+            </Field>
             {FIELDS.map((field) => (
               <Field key={field.key} label={field.label}>
                 {field.textarea ? (

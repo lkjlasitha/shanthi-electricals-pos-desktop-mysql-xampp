@@ -1,6 +1,6 @@
 {
   "name": "shanthi-electricals-backend",
-  "version": "1.5.0",
+  "version": "1.9.0",
   "description": "Shanthi Electricals POS, invoicing, quotations, reports and warehouse backend",
   "main": "src/server.js",
   "type": "commonjs",
@@ -20,8 +20,7 @@
     "express": "^4.19.2",
     "express-validator": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
-    "mysql2": "^3.11.0",
-    "sequelize": "^6.37.3",
+    "mongodb": "^6.20.0",
     "morgan": "^1.10.0",
     "nanoid": "^3.3.7",
     "exceljs": "^4.4.0",

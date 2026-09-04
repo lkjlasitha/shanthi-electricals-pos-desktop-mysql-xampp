@@ -22,6 +22,7 @@ export default function CrudPage({ title, subtitle, api, columns, fields, hasPer
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const canWrite = !permission || (hasPermission && hasPermission(permission));
 
@@ -57,7 +58,9 @@ export default function CrudPage({ title, subtitle, api, columns, fields, hasPer
 
   const submit = async (e) => {
     e.preventDefault();
+    if (saving) return;
     setError('');
+    setSaving(true);
     try {
       if (editing) await api.update(editing.id, form);
       else await api.create(form);
@@ -65,6 +68,8 @@ export default function CrudPage({ title, subtitle, api, columns, fields, hasPer
       load();
     } catch (e2) {
       setError(e2.response?.data?.message || 'Save failed');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -168,8 +173,8 @@ export default function CrudPage({ title, subtitle, api, columns, fields, hasPer
             </Field>
           ))}
           <div className="flex justify-end gap-2 mt-4">
-            <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button type="submit">Save</Button>
+            <Button type="button" variant="secondary" disabled={saving} onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
           </div>
         </form>
       </Modal>

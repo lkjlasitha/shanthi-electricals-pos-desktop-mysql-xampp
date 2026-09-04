@@ -37,7 +37,10 @@ function sharedStyles(receipt = false) {
     body { ${receipt ? 'width:72mm;font-size:10px;' : 'font-size:12px;'} }
     .document { width: 100%; }
     .header { display:flex; justify-content:space-between; gap:24px; border-bottom:2px solid #9a5b32; padding-bottom:12px; margin-bottom:16px; }
-    .brand { color:#8a4b24; font-size:${receipt ? '16px' : '24px'}; font-weight:700; }
+    .brand-block { display:flex; gap:10px; align-items:flex-start; }
+    .brand-logo { width:${receipt ? '34px' : '46px'}; height:${receipt ? '36px' : '48px'}; object-fit:contain; flex-shrink:0; }
+    .brand { color:#8a4b24; font-size:${receipt ? '16px' : '22px'}; font-weight:700; line-height:1.15; }
+    .tagline { color:#6b7280; font-size:${receipt ? '8px' : '9.5px'}; font-style:italic; line-height:1.35; margin-top:2px; }
     .muted { color:#5b6474; }
     .title { text-align:right; font-size:${receipt ? '12px' : '20px'}; font-weight:700; text-transform:uppercase; }
     .info-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
@@ -91,6 +94,22 @@ async function printWindow(html, title, options = {}) {
   return popup;
 }
 
+function unitQuantityLabel(item) {
+  const unit = item.saleUnitRef || item.SaleUnitRef;
+  if (unit && item.unit_quantity !== null && item.unit_quantity !== undefined) {
+    return `${item.unit_quantity} ${unit.short_name || unit.name}`;
+  }
+  return item.quantity;
+}
+
+function unitPriceSuffix(item, type) {
+  if (type !== 'sale' && type !== 'quotation') return '';
+  const stockUnit = item.Product?.stockUnit;
+  const saleUnit = item.saleUnitRef || item.SaleUnitRef;
+  if (!stockUnit || !saleUnit || stockUnit.id === saleUnit.id) return '';
+  return stockUnit.short_name ? ` / ${stockUnit.short_name}` : '';
+}
+
 function transactionHtml(type, record, settings = {}, receipt = false) {
   const meta = transactionMeta(type, record);
   const party = meta.party || {};
@@ -108,8 +127,8 @@ function transactionHtml(type, record, settings = {}, receipt = false) {
     }
     return `<tr>
       <td><strong>${escapeHtml(itemName)}</strong>${item.is_manual ? '<br><span class="muted">Manual bill item</span>' : ''}<br><span class="muted">${escapeHtml(itemCode)}</span></td>
-      <td class="number">${escapeHtml(item.quantity)}</td>
-      <td class="number">${escapeHtml(money(item[meta.unitKey], settings))}</td>
+      <td class="number">${escapeHtml(unitQuantityLabel(item))}${type === 'purchase' && item.received_quantity !== undefined ? `<br><span class="muted">Received ${escapeHtml(item.received_quantity || 0)}</span>` : ''}</td>
+      <td class="number">${escapeHtml(money(item[meta.unitKey], settings))}${escapeHtml(unitPriceSuffix(item, type))}</td>
       <td class="number">${escapeHtml(money(item.discount_amount, settings))}</td>
       <td class="number">${escapeHtml(money(item.tax_amount, settings))}</td>
       <td class="number">${escapeHtml(money(item.sub_total, settings))}</td>
@@ -117,27 +136,37 @@ function transactionHtml(type, record, settings = {}, receipt = false) {
   }).join('');
 
   const paid = Number(record.paid_amount ?? record.received_amount ?? 0);
-  const balance = Math.max(Number(record.grand_total || 0) - paid, 0);
+  const returned = type === 'purchase' ? Number(record.returned_amount || 0) : 0;
+  const balance = Math.max(Number(record.grand_total || 0) - returned - paid, 0);
+  const supplierCredit = type === 'purchase' ? Math.max(0, paid - (Number(record.grand_total || 0) - returned)) : 0;
   const totals = type === 'adjustment' ? '' : `<table class="totals">
     <tr><td>Order tax</td><td class="number">${escapeHtml(money(record.tax_amount, settings))}</td></tr>
     <tr><td>Discount</td><td class="number">${escapeHtml(money(record.discount, settings))}</td></tr>
     <tr><td>Shipping</td><td class="number">${escapeHtml(money(record.shipping, settings))}</td></tr>
     <tr class="grand"><td>Grand total</td><td class="number">${escapeHtml(money(record.grand_total, settings))}</td></tr>
-    ${(type === 'sale' || type === 'purchase') ? `<tr><td>Paid</td><td class="number">${escapeHtml(money(paid, settings))}</td></tr>${balance > 0.005 ? `<tr><td><strong>Balance due</strong></td><td class="number"><strong>${escapeHtml(money(balance, settings))}</strong></td></tr>` : ''}` : ''}
+    ${type === 'purchase' && returned > 0.005 ? `<tr><td>Supplier return credits</td><td class="number">-${escapeHtml(money(returned, settings))}</td></tr>` : ''}
+    ${(type === 'sale' || type === 'purchase') ? `<tr><td>Paid</td><td class="number">${escapeHtml(money(paid, settings))}</td></tr>${balance > 0.005 ? `<tr><td><strong>Balance due</strong></td><td class="number"><strong>${escapeHtml(money(balance, settings))}</strong></td></tr>` : ''}${supplierCredit > 0.005 ? `<tr><td><strong>Supplier credit / refund</strong></td><td class="number"><strong>${escapeHtml(money(supplierCredit, settings))}</strong></td></tr>` : ''}` : ''}
   </table>`;
 
   return `<style>${sharedStyles(receipt)}</style><main class="document">
     <section class="header">
-      <div>
-        <div class="brand">${escapeHtml(settings.business_name || 'Shanthi Electricals')}</div>
-        <div>${escapeHtml(settings.business_address || '')}</div>
-        <div>${escapeHtml([settings.business_phone, settings.business_email].filter(Boolean).join(' · '))}</div>
-        ${settings.business_tax_number ? `<div>TIN/VAT: ${escapeHtml(settings.business_tax_number)}</div>` : ''}
+      <div class="brand-block">
+        ${settings.business_logo ? `<img class="brand-logo" src="${escapeHtml(settings.business_logo)}" alt="" />` : ''}
+        <div>
+          <div class="brand">${escapeHtml(settings.business_name || 'Shanthi Electricals')}</div>
+          ${String(settings.business_tagline || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => `<div class="tagline">${escapeHtml(line)}</div>`).join('')}
+          <div>${escapeHtml(settings.business_address || '')}</div>
+          <div>${escapeHtml([settings.business_phone, settings.business_email].filter(Boolean).join(' · '))}</div>
+          ${settings.business_tax_number ? `<div>TIN/VAT: ${escapeHtml(settings.business_tax_number)}</div>` : ''}
+        </div>
       </div>
       <div>
         <div class="title">${escapeHtml(receipt && type === 'sale' ? 'Sales Receipt' : meta.title)}</div>
         <div><strong>Reference:</strong> ${escapeHtml(record.reference_code || `#${record.id}`)}</div>
         <div><strong>Date:</strong> ${escapeHtml(record.date || '')}</div>
+        ${type === 'purchase' && record.supplier_invoice_number ? `<div><strong>Supplier invoice:</strong> ${escapeHtml(record.supplier_invoice_number)}</div>` : ''}
+        ${(type === 'sale' || type === 'purchase') && record.due_date ? `<div><strong>Due date:</strong> ${escapeHtml(record.due_date)}</div>` : ''}
+        ${type === 'purchase' ? `<div><strong>Receiving:</strong> ${escapeHtml(human(record.status || 'ordered'))}</div>` : ''}
         <div><strong>Status:</strong> ${escapeHtml(human(status))}</div>
       </div>
     </section>
@@ -148,7 +177,7 @@ function transactionHtml(type, record, settings = {}, receipt = false) {
     <table><thead><tr>${itemHeader}</tr></thead><tbody>${itemRows || `<tr><td colspan="6">No line items.</td></tr>`}</tbody></table>
     ${totals}
     ${meta.notes ? `<div class="notes"><strong>Notes</strong><br>${escapeHtml(meta.notes)}</div>` : ''}
-    <div class="footer">${escapeHtml(meta.title === 'Quotation' ? (settings.quotation_terms || '') : (settings.receipt_footer || 'Thank you for shopping with Shanthi Electricals.'))}<br>Generated by Shanthi Electricals POS</div>
+    <div class="footer">${escapeHtml(meta.title === 'Quotation' ? (settings.quotation_terms || '') : (settings.receipt_footer || 'Thank you for shopping with Shanthi Electricals.'))}<br>Generated by ${escapeHtml(settings.business_name || 'Shanthi Electricals')} POS</div>
   </main>`;
 }
 
@@ -168,7 +197,7 @@ function receiptHtml(record, settings = {}) {
     return `<div class="receipt-item">
       <div class="receipt-item-name">${escapeHtml(itemName)}</div>
       ${itemCode ? `<div class="receipt-code">${escapeHtml(itemCode)}</div>` : ''}
-      <div class="receipt-item-line"><span>${escapeHtml(item.quantity)} × ${escapeHtml(money(item.product_price, settings))}</span><strong>${escapeHtml(money(item.sub_total, settings))}</strong></div>
+      <div class="receipt-item-line"><span>${escapeHtml(unitQuantityLabel(item))} × ${escapeHtml(money(item.product_price, settings))}</span><strong>${escapeHtml(money(item.sub_total, settings))}</strong></div>
       ${discount > 0 ? `<div class="receipt-item-line"><span>Item discount</span><span>-${escapeHtml(money(discount, settings))}</span></div>` : ''}
     </div>`;
   }).join('');
@@ -179,10 +208,13 @@ function receiptHtml(record, settings = {}) {
     html, body { margin:0; padding:0; background:#fff; color:#111; font-family:Arial,Helvetica,sans-serif; }
     body { width:74mm; font-size:10px; }
     .receipt { width:100%; }
-    .receipt-brand { text-align:center; font-size:16px; font-weight:700; margin-bottom:3px; }
+    .receipt-logo { display:block; width:34px; height:36px; object-fit:contain; margin:0 auto 4px; }
+    .receipt-brand { text-align:center; font-size:16px; font-weight:700; margin-bottom:2px; }
+    .receipt-tagline { text-align:center; font-size:8px; font-style:italic; color:#555; line-height:1.35; margin-bottom:2px; }
     .receipt-center { text-align:center; line-height:1.35; }
     .receipt-title { text-align:center; font-size:11px; font-weight:700; letter-spacing:.8px; margin:7px 0; }
     .receipt-separator { border-top:1px dashed #555; margin:7px 0; }
+    .receipt-separator.solid { border-top:1.5px solid #222; }
     .receipt-meta { display:grid; grid-template-columns:22mm 1fr; gap:2px 3px; line-height:1.35; }
     .receipt-meta strong { font-weight:700; }
     .receipt-item { padding:4px 0; border-bottom:1px dotted #aaa; }
@@ -193,11 +225,13 @@ function receiptHtml(record, settings = {}) {
     .receipt-total.strong { font-size:12px; font-weight:700; border-top:1px solid #222; border-bottom:1px solid #222; padding:4px 0; margin:3px 0; }
     .receipt-footer { text-align:center; line-height:1.4; margin-top:8px; }
   </style><main class="receipt">
+    ${settings.business_logo ? `<img class="receipt-logo" src="${escapeHtml(settings.business_logo)}" alt="" />` : ''}
     <div class="receipt-brand">${escapeHtml(settings.business_name || 'Shanthi Electricals')}</div>
+    ${String(settings.business_tagline || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => `<div class="receipt-tagline">${escapeHtml(l)}</div>`).join('')}
     <div class="receipt-center">${escapeHtml(settings.business_address || '')}</div>
     <div class="receipt-center">${escapeHtml([settings.business_phone, settings.business_email].filter(Boolean).join(' · '))}</div>
     ${settings.business_tax_number ? `<div class="receipt-center">TIN/VAT: ${escapeHtml(settings.business_tax_number)}</div>` : ''}
-    <div class="receipt-separator"></div>
+    <div class="receipt-separator solid"></div>
     <div class="receipt-title">SALES RECEIPT</div>
     <div class="receipt-meta">
       <strong>Invoice</strong><span>${escapeHtml(record.reference_code || `#${record.id}`)}</span>
@@ -216,7 +250,7 @@ function receiptHtml(record, settings = {}) {
     ${balance > 0.005 ? line('Balance', balance, true) : ''}
     ${change > 0.005 ? line('Change', change) : ''}
     <div class="receipt-separator"></div>
-    <div class="receipt-footer">${escapeHtml(settings.receipt_footer || 'Thank you for shopping with Shanthi Electricals.')}<br>Shanthi Electricals POS</div>
+    <div class="receipt-footer">${escapeHtml(settings.receipt_footer || 'Thank you for shopping with Shanthi Electricals.')}<br>${escapeHtml(settings.business_name || 'Shanthi Electricals')} POS</div>
   </main>`;
 }
 
@@ -237,6 +271,6 @@ export function printReport({ title, columns, rows, totals = {}, settings = {}, 
     const value = index === 0 ? 'TOTAL' : totals[column.key];
     return `<td class="${column.align === 'right' ? 'number' : ''}">${escapeHtml(column.type === 'money' && value !== undefined ? money(value, settings) : value ?? '')}</td>`;
   }).join('')}</tr>` : '';
-  const html = `<style>${sharedStyles(false)}</style><main class="document"><section class="header"><div><div class="brand">${escapeHtml(settings.business_name || 'Shanthi Electricals')}</div><div>${escapeHtml(settings.business_address || '')}</div></div><div><div class="title">${escapeHtml(title)}</div>${range ? `<div>${escapeHtml(range)}</div>` : ''}</div></section><table><thead><tr>${headers}</tr></thead><tbody>${body}${totalRow}</tbody></table><div class="footer">Generated by Shanthi Electricals POS</div></main>`;
+  const html = `<style>${sharedStyles(false)}</style><main class="document"><section class="header"><div><div class="brand">${escapeHtml(settings.business_name || 'Shanthi Electricals')}</div><div>${escapeHtml(settings.business_address || '')}</div></div><div><div class="title">${escapeHtml(title)}</div>${range ? `<div>${escapeHtml(range)}</div>` : ''}</div></section><table><thead><tr>${headers}</tr></thead><tbody>${body}${totalRow}</tbody></table><div class="footer">Generated by ${escapeHtml(settings.business_name || 'Shanthi Electricals')} POS</div></main>`;
   return printWindow(html, title);
 }

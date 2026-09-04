@@ -1,6 +1,6 @@
 const { Expense, ExpenseCategory, Warehouse } = require('../models/associations');
 const { asyncHandler } = require('../utils/helpers');
-const { Op } = require('sequelize');
+const { Op } = require('../database/mongoOrm');
 
 const list = asyncHandler(async (req, res) => {
   const where = {};

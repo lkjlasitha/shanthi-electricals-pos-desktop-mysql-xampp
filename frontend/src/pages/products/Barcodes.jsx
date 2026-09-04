@@ -60,6 +60,7 @@ export default function Barcodes() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [scannerValue, setScannerValue] = useState('');
   const [scannerResult, setScannerResult] = useState('');
   const scannerInputRef = useRef(null);
@@ -69,7 +70,7 @@ export default function Barcodes() {
   });
 
   useEffect(() => {
-    ProductsAPI.list({ per_page: 200 }).then((response) => setProducts(response.data.data || response.data)).finally(() => setLoading(false));
+    ProductsAPI.list({ per_page: 200 }).then((response) => setProducts(response.data.data || response.data)).catch((requestError) => setLoadError(requestError.response?.data?.message || 'Products could not be loaded.')).finally(() => setLoading(false));
   }, []);
 
   const filtered = useMemo(() => {
@@ -122,6 +123,7 @@ export default function Barcodes() {
           subtitle="Select products, design the label, and print to an A4 sheet or barcode-label printer. The browser print dialog can also save the sheet as PDF."
           actions={<Button onClick={() => window.print()} disabled={!selectedCount}>Print / Save PDF</Button>}
         />
+        {loadError && <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{loadError}</div>}
 
         <Card className="p-4 mb-5">
           <div className="flex flex-col lg:flex-row lg:items-end gap-4">

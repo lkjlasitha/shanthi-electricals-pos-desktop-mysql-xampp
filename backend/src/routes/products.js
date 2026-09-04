@@ -17,6 +17,6 @@ router.post('/', requirePermission('products.manage'), productController.create)
 router.put('/:id', requirePermission('products.manage'), productController.update);
 router.post('/:id/adjust-prices', requirePermission('products.manage'), productController.adjustPrices);
 router.delete('/:id', requirePermission('products.manage'), productController.remove);
-router.post('/:id/stock', requirePermission('products.manage'), productController.setStock);
+router.post('/:id/stock', requirePermission('stock.manage'), productController.setStock);
 
 module.exports = router;

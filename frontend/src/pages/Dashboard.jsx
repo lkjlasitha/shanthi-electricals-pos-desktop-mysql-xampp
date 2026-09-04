@@ -83,7 +83,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
         <Stat label="Today's net sales" value={formatMoney(data.today_net_sales)} note={`Returns: ${formatMoney(data.today_sale_returns)}`} accent />
         <Stat label="Today's purchases" value={formatMoney(data.today_purchases)} note={`Returns: ${formatMoney(data.today_purchase_returns)}`} />
-        <Stat label="Payments received" value={formatMoney(data.today_received)} note="Recorded against today's sales" />
+        <Stat label="Payments received" value={formatMoney(data.today_received)} note="All invoice/account receipts recorded today" />
         <Stat label="Today's expenses" value={formatMoney(data.today_expenses)} />
       </div>
 
@@ -94,7 +94,7 @@ export default function Dashboard() {
         <Stat label="Stock cost value" value={formatMoney(data.stock_value)} note="Current quantity × current cost" />
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
         <Link to="/customers/receivables" className="block">
           <Card className="p-5 min-w-0 border-amber-300 hover:border-copper-500 transition-colors">
             <div className="text-xs uppercase tracking-wide text-graphite-500 font-medium mb-1">Money owed to the shop</div>
@@ -104,8 +104,22 @@ export default function Dashboard() {
             </div>
           </Card>
         </Link>
+        <Stat label="Overdue receivables" value={formatMoney(data.overdue_receivables)} note="Past invoice due dates" />
         <Stat label="Outstanding on invoices" value={formatMoney(data.outstanding_from_sales)} note="Credit / partial sales not yet fully paid" />
         <Stat label="Outstanding opening balances" value={formatMoney(data.outstanding_from_opening_balance)} note="Pre-existing dues not tied to a bill" />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+        <Link to="/purchases" className="block">
+          <Card className="p-5 min-w-0 border-blue-300 hover:border-copper-500 transition-colors">
+            <div className="text-xs uppercase tracking-wide text-graphite-500 font-medium mb-1">Money owed to suppliers</div>
+            <div className="font-display text-2xl font-semibold truncate text-blue-800">{formatMoney(data.outstanding_payables)}</div>
+            <div className="text-xs text-graphite-500 mt-1">{data.open_supplier_bills || 0} open supplier bill(s) — tap to view →</div>
+          </Card>
+        </Link>
+        <Stat label="Overdue supplier bills" value={formatMoney(data.overdue_payables)} note="Past supplier bill due dates" />
+        <Stat label="Paid to suppliers today" value={formatMoney(data.supplier_payments_today)} note="Payments recorded today" />
+        <Stat label="Open supplier bills" value={data.open_supplier_bills || 0} note="Unpaid or partially paid" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">

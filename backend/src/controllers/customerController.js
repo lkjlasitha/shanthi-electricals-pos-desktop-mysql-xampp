@@ -1,10 +1,14 @@
 const {
-  Customer, Sale, SaleItem, SalesPayment, Warehouse, Product, CustomerPayment, Quotation, QuotationItem,
+  Customer, Sale, SaleItem, SalesPayment, Warehouse, Product, CustomerPayment, Quotation, QuotationItem, POSRegister, sequelize,
 } = require('../models/associations');
 const { asyncHandler } = require('../utils/helpers');
-const { todayISO } = require('../utils/date');
+const { todayISO, daysBetweenISO } = require('../utils/date');
 const HttpError = require('../utils/httpError');
-const { listCustomerBalances, computeCustomerDue, getReceivablesTotals } = require('../services/customerLedgerService');
+const {
+  listCustomerBalances, computeCustomerDue, getReceivablesTotals, planCustomerPayment,
+} = require('../services/customerLedgerService');
+
+const PAYMENT_METHODS = new Set(['cash', 'card', 'bank_transfer', 'cheque', 'other']);
 
 // Accounts-receivable view: every customer who currently owes the shop
 // money, most owed first. This is the "who do we need to collect from"
@@ -52,57 +56,149 @@ const profile = asyncHandler(async (req, res) => {
       order: [['id', 'DESC']],
       limit: 25,
     }),
-    CustomerPayment.findAll({ where: { customer_id: customer.id }, order: [['paid_on', 'DESC'], ['id', 'DESC']] }),
+    CustomerPayment.findAll({
+      where: { customer_id: customer.id },
+      include: [{
+        model: SalesPayment,
+        as: 'allocations',
+        include: [{ model: Sale, attributes: ['id', 'reference_code', 'date', 'grand_total'] }],
+      }],
+      order: [['paid_on', 'DESC'], ['id', 'DESC']],
+    }),
   ]);
 
-  const salesDue = sales.reduce((sum, sale) => (
-    sale.payment_status !== 'paid' ? sum + (Number(sale.grand_total) - Number(sale.paid_amount)) : sum
+  const today = todayISO();
+  const salesWithBalances = sales.map((sale) => {
+    const row = sale.toJSON();
+    const dueAmount = Math.max(0, Number(row.grand_total || 0) - Number(row.paid_amount || 0));
+    const isOverdue = dueAmount > 0.005 && Boolean(row.due_date) && row.due_date < today;
+    return {
+      ...row,
+      due_amount: dueAmount,
+      is_overdue: isOverdue,
+      days_overdue: isOverdue ? daysBetweenISO(row.due_date, today) : 0,
+    };
+  });
+  const salesDue = salesWithBalances.reduce((sum, sale) => sum + sale.due_amount, 0);
+  const openingPaymentsTotal = accountPayments.reduce((sum, payment) => (
+    sum + Number(payment.opening_balance_amount === null ? payment.amount : payment.opening_balance_amount || 0)
   ), 0);
-  const accountPaymentsTotal = accountPayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
   const due = computeCustomerDue({
     opening_balance: customer.opening_balance,
     sales_due: salesDue,
-    account_payments: accountPaymentsTotal,
+    opening_payments: openingPaymentsTotal,
   });
+  const overdueDue = salesWithBalances.reduce((sum, sale) => sum + (sale.is_overdue ? sale.due_amount : 0), 0);
+  const unpaidSales = salesWithBalances.filter((sale) => sale.due_amount > 0.005);
+  const paymentDates = [
+    ...accountPayments.map((payment) => payment.paid_on),
+    ...salesWithBalances.flatMap((sale) => (sale.payments || []).map((payment) => payment.paid_on)),
+  ].filter(Boolean).sort().reverse();
 
   res.json({
     data: {
       customer,
-      sales,
+      sales: salesWithBalances,
       quotations,
       account_payments: accountPayments,
       summary: {
-        total_purchases: sales.reduce((sum, sale) => sum + Number(sale.grand_total), 0),
-        invoice_count: sales.length,
-        unpaid_invoice_count: sales.filter((sale) => sale.payment_status !== 'paid').length,
-        last_purchase_date: sales[0]?.date || null,
+        total_purchases: salesWithBalances.reduce((sum, sale) => sum + Number(sale.grand_total), 0),
+        total_paid: salesWithBalances.reduce((sum, sale) => sum + Number(sale.paid_amount || 0), 0) + openingPaymentsTotal,
+        invoice_count: salesWithBalances.length,
+        unpaid_invoice_count: unpaidSales.length,
+        overdue_invoice_count: unpaidSales.filter((sale) => sale.is_overdue).length,
+        overdue_due: overdueDue,
+        current_due: Math.max(0, due.total_due - overdueDue),
+        next_due_date: unpaidSales.map((sale) => sale.due_date).filter(Boolean).sort()[0] || null,
+        last_purchase_date: salesWithBalances[0]?.date || null,
+        last_payment_date: paymentDates[0] || null,
         ...due,
-        over_credit_limit: Boolean(customer.credit_limit) && due.total_due > Number(customer.credit_limit),
+        over_credit_limit: Number(customer.credit_limit || 0) > 0 && due.total_due > Number(customer.credit_limit),
       },
     },
   });
 });
 
-// Records a payment "on account" — money the customer pays down against
-// their general/opening balance rather than one specific invoice (e.g. a
-// regular customer settling part of an old running tab).
+// Records one customer-level receipt and allocates it oldest-debt-first:
+// opening balance, then invoice balances. Each invoice allocation also creates
+// a SalesPayment row, so the related bill and every other screen remain exact.
 const addAccountPayment = asyncHandler(async (req, res) => {
-  const customer = await Customer.findByPk(req.params.id);
-  if (!customer) return res.status(404).json({ message: 'Customer not found' });
-
-  const amount = Number(req.body.amount);
+  const body = req.body || {};
+  const amount = Number(body.amount);
   if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(422, 'Enter a valid payment amount greater than zero.');
+  const method = String(body.paying_method || 'cash');
+  if (!PAYMENT_METHODS.has(method)) throw new HttpError(422, 'Select a valid payment method.');
 
-  const payment = await CustomerPayment.create({
-    customer_id: customer.id,
-    amount,
-    paying_method: req.body.paying_method || 'cash',
-    reference: req.body.reference || null,
-    note: req.body.note || null,
-    paid_on: req.body.paid_on || todayISO(),
-    created_by: req.user ? req.user.id : null,
+  const paymentId = await sequelize.transaction(async (transaction) => {
+    const customer = await Customer.findByPk(req.params.id, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!customer) throw new HttpError(404, 'Customer not found');
+
+    const oldAccountPayments = await CustomerPayment.findAll({
+      where: { customer_id: customer.id },
+      attributes: ['amount', 'opening_balance_amount'],
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    const openSales = await Sale.findAll({
+      where: { customer_id: customer.id },
+      order: [['date', 'ASC'], ['id', 'ASC']],
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    const openingPaid = oldAccountPayments.reduce((sum, payment) => (
+      sum + Number(payment.opening_balance_amount === null ? payment.amount : payment.opening_balance_amount || 0)
+    ), 0);
+    const plan = planCustomerPayment({
+      amount,
+      opening_balance_due: Math.max(0, Number(customer.opening_balance || 0) - openingPaid),
+      sales: openSales.map((sale) => ({
+        id: sale.id,
+        due_amount: Math.max(0, Number(sale.grand_total || 0) - Number(sale.paid_amount || 0)),
+      })),
+    });
+    const activeRegister = req.user ? await POSRegister.findOne({
+      where: { user_id: req.user.id, status: 'open' }, transaction,
+    }) : null;
+
+    const payment = await CustomerPayment.create({
+      customer_id: customer.id,
+      pos_register_id: activeRegister?.id || null,
+      amount,
+      paying_method: method,
+      opening_balance_amount: plan.opening_balance_amount,
+      reference: String(body.reference || '').trim() || null,
+      note: String(body.note || '').trim() || null,
+      paid_on: body.paid_on || todayISO(),
+      created_by: req.user ? req.user.id : null,
+    }, { transaction });
+
+    const salesById = new Map(openSales.map((sale) => [Number(sale.id), sale]));
+    for (const allocation of plan.allocations) {
+      const sale = salesById.get(Number(allocation.sale_id));
+      await SalesPayment.create({
+        sale_id: sale.id,
+        pos_register_id: activeRegister?.id || null,
+        customer_payment_id: payment.id,
+        amount: allocation.amount,
+        paying_method: method,
+        received_amount: allocation.amount,
+        reference: String(body.reference || '').trim() || null,
+        note: `Allocated from customer account payment #${payment.id}`,
+        paid_on: body.paid_on || todayISO(),
+      }, { transaction });
+
+      sale.paid_amount = Math.min(Number(sale.grand_total), Number(sale.paid_amount || 0) + allocation.amount);
+      sale.payment_status = sale.paid_amount >= Number(sale.grand_total) - 0.005 ? 'paid' : 'partial';
+      await sale.save({ transaction });
+    }
+
+    return payment.id;
   });
 
+  const payment = await CustomerPayment.findByPk(paymentId, {
+    include: [{ model: SalesPayment, as: 'allocations', include: [Sale] }],
+  });
   res.status(201).json({ data: payment });
 });
 

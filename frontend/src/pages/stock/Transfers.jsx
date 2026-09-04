@@ -11,6 +11,7 @@ export default function Transfers() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const [date, setDate] = useState(todayISO());
   const [fromId, setFromId] = useState('');
@@ -19,7 +20,7 @@ export default function Transfers() {
   const [items, setItems] = useState([]);
   const [productToAdd, setProductToAdd] = useState('');
 
-  const load = () => { setLoading(true); StockAPI.listTransfers().then((r) => setTransfers(r.data.data || r.data)).finally(() => setLoading(false)); };
+  const load = () => { setLoading(true); StockAPI.listTransfers().then((r) => setTransfers(r.data.data || r.data)).catch((requestError) => setError(requestError.response?.data?.message || 'Transfers could not be loaded.')).finally(() => setLoading(false)); };
   useEffect(() => {
     load();
     WarehousesAPI.list({ per_page: 200 }).then((r) => setWarehouses(r.data.data || r.data));
@@ -29,15 +30,19 @@ export default function Transfers() {
   const addItem = () => {
     const product = products.find((p) => String(p.id) === String(productToAdd));
     if (!product) return;
-    setItems((prev) => [...prev, { product, quantity: 1, purchase_cost: product.product_cost }]);
+    setItems((prev) => prev.some((item) => item.product.id === product.id)
+      ? prev.map((item) => item.product.id === product.id ? { ...item, quantity: Number(item.quantity || 0) + 1 } : item)
+      : [...prev, { product, quantity: 1, purchase_cost: product.product_cost }]);
     setProductToAdd('');
   };
   const grandTotal = useMemo(() => items.reduce((s, it) => s + Number(it.quantity) * Number(it.purchase_cost || 0), 0), [items]);
 
   const submit = async (e) => {
     e.preventDefault();
+    if (saving) return;
     setError('');
     if (!items.length) return setError('Add at least one item.');
+    setSaving(true);
     try {
       await StockAPI.createTransfer({
         date, from_warehouse_id: fromId, to_warehouse_id: toId, notes,
@@ -48,6 +53,8 @@ export default function Transfers() {
       load();
     } catch (e2) {
       setError(e2.response?.data?.message || 'Transfer failed');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -113,8 +120,8 @@ export default function Transfers() {
           <Field label="Notes"><textarea className={inputClass} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
           <div className="text-right font-display font-semibold mb-3">Value: <span className="text-copper-600">{formatMoney(grandTotal)}</span></div>
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button type="submit">Save Transfer</Button>
+            <Button type="button" variant="secondary" disabled={saving} onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Transfer'}</Button>
           </div>
         </form>
       </Modal>

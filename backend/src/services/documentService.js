@@ -8,9 +8,23 @@ const {
   PurchaseReturn, PurchaseReturnItem,
   Transfer, TransferItem,
   Adjustment, AdjustmentItem,
-  Product,
+  Product, Unit,
 } = require('../models/associations');
 const { getSettings } = require('./settingsService');
+
+// Decodes a `data:image/...;base64,....` URI into a Buffer pdfkit can embed.
+// Returns null for anything missing/malformed so callers can skip the logo
+// gracefully instead of crashing document generation.
+function decodeDataUri(dataUri) {
+  if (!dataUri || typeof dataUri !== 'string') return null;
+  const match = /^data:image\/(png|jpe?g);base64,(.+)$/.exec(dataUri.trim());
+  if (!match) return null;
+  try {
+    return Buffer.from(match[2], 'base64');
+  } catch {
+    return null;
+  }
+}
 
 const TYPE_ALIASES = Object.freeze({
   sale: 'sale',
@@ -48,14 +62,14 @@ async function loadDocument(type, id) {
         include: [
           Customer,
           Warehouse,
-          { model: SaleItem, as: 'items', include: [Product] },
+          { model: SaleItem, as: 'items', include: [{ model: Product, include: [{ model: Unit, as: 'stockUnit' }] }, { model: Unit, as: 'saleUnitRef' }] },
           { model: SalesPayment, as: 'payments' },
         ],
       });
       break;
     case 'quotation':
       record = await Quotation.findByPk(numericId, {
-        include: [Customer, Warehouse, { model: QuotationItem, as: 'items', include: [Product] }],
+        include: [Customer, Warehouse, { model: QuotationItem, as: 'items', include: [{ model: Product, include: [{ model: Unit, as: 'stockUnit' }] }, { model: Unit, as: 'saleUnitRef' }] }],
       });
       break;
     case 'purchase':
@@ -130,7 +144,7 @@ function documentMeta(type, record) {
       };
     case 'purchase':
       return {
-        title: 'PURCHASE',
+        title: 'SUPPLIER PURCHASE BILL',
         partyLabel: 'Supplier',
         party: record.Supplier,
         warehouse: record.Warehouse,
@@ -191,6 +205,17 @@ function documentMeta(type, record) {
   }
 }
 
+function unitQuantityLabel(item) {
+  const quantity = Number(item.quantity || 0);
+  const unit = item.saleUnitRef || item.SaleUnitRef;
+  if (unit && item.unit_quantity !== null && item.unit_quantity !== undefined) {
+    const displayQty = Number(item.unit_quantity);
+    const unitLabel = unit.short_name || unit.name;
+    return `${displayQty} ${unitLabel}`;
+  }
+  return String(quantity);
+}
+
 function itemRows(type, record, meta) {
   return (record.items || []).map((item) => {
     const product = item.Product || {};
@@ -201,7 +226,16 @@ function itemRows(type, record, meta) {
       name: item.item_name || product.name || (item.product_id ? `Product #${item.product_id}` : 'Manual item'),
       code: item.item_code || product.code || '',
       quantity: Number(item.quantity || 0),
+      quantityLabel: type === 'purchase' && item.received_quantity !== undefined
+        ? `${Number(item.quantity || 0)} / R ${Number(item.received_quantity || 0)}`
+        : unitQuantityLabel(item),
       unitValue,
+      unitSuffix: (type === 'sale' || type === 'quotation')
+        && item.saleUnitRef && item.Product?.stockUnit
+        && item.saleUnitRef.id !== item.Product.stockUnit.id
+        && item.Product.stockUnit.short_name
+        ? ` / ${item.Product.stockUnit.short_name}`
+        : '',
       discount: Number(item.discount_amount || 0),
       tax: Number(item.tax_amount || 0),
       total,
@@ -226,29 +260,50 @@ function collectPdf(doc) {
 function drawBusinessHeader(doc, settings, meta, record) {
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
+  const logoBuffer = decodeDataUri(settings.business_logo);
+  const textLeft = logoBuffer ? left + 52 : left;
+  const textWidth = 310 - (logoBuffer ? 52 : 0);
 
-  doc.font('Helvetica-Bold').fontSize(20).fillColor('#8a4b24').text(settings.business_name || 'Shanthi Electricals', left, 38, { width: 310 });
-  doc.font('Helvetica').fontSize(9).fillColor('#333333');
-  doc.text(settings.business_address || '', left, 65, { width: 310 });
+  if (logoBuffer) {
+    try { doc.image(logoBuffer, left, 32, { width: 44, height: 46 }); } catch { /* corrupt logo, skip */ }
+  }
+
+  doc.font('Helvetica-Bold').fontSize(18).fillColor('#8a4b24').text(settings.business_name || 'Shanthi Electricals', textLeft, 34, { width: textWidth });
+  const taglineLines = String(settings.business_tagline || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  if (taglineLines.length) {
+    doc.font('Helvetica-Oblique').fontSize(7.5).fillColor('#6b7280');
+    taglineLines.forEach((line, index) => doc.text(line, textLeft, doc.y + (index === 0 ? 2 : 0), { width: textWidth }));
+  }
+
+  doc.font('Helvetica').fontSize(9).fillColor('#333333').text(settings.business_address || '', left, doc.y + 6, { width: 330 });
   const contact = [settings.business_phone, settings.business_email].filter(Boolean).join('  |  ');
-  if (contact) doc.text(contact, left, doc.y + 2, { width: 310 });
-  if (settings.business_tax_number) doc.text(`TIN/VAT: ${settings.business_tax_number}`, left, doc.y + 2, { width: 310 });
+  if (contact) doc.text(contact, left, doc.y + 2, { width: 330 });
+  if (settings.business_tax_number) doc.text(`TIN/VAT: ${settings.business_tax_number}`, left, doc.y + 2, { width: 330 });
+  const headerBottom = Math.max(doc.y + 8, 96);
 
   doc.font('Helvetica-Bold').fontSize(15).fillColor('#1f2937').text(meta.title, right - 190, 40, { width: 190, align: 'right' });
   doc.font('Helvetica').fontSize(9).fillColor('#374151');
   doc.text(`Reference: ${text(record.reference_code, `#${record.id}`)}`, right - 210, 66, { width: 210, align: 'right' });
   doc.text(`Date: ${text(record.date)}`, right - 210, doc.y + 2, { width: 210, align: 'right' });
+  if (meta.title === 'SUPPLIER PURCHASE BILL' && record.supplier_invoice_number) {
+    doc.text(`Supplier invoice: ${text(record.supplier_invoice_number)}`, right - 210, doc.y + 2, { width: 210, align: 'right' });
+  }
+  if ((meta.title === 'SALES INVOICE' || meta.title === 'SUPPLIER PURCHASE BILL') && record.due_date) {
+    doc.text(`Due date: ${text(record.due_date)}`, right - 210, doc.y + 2, { width: 210, align: 'right' });
+  }
   doc.text(`Status: ${text(meta.status).toUpperCase()}`, right - 210, doc.y + 2, { width: 210, align: 'right' });
 
-  doc.moveTo(left, 112).lineTo(right, 112).strokeColor('#d1d5db').stroke();
+  const ruleY = Math.max(headerBottom, doc.y + 6, 128);
+  doc.moveTo(left, ruleY).lineTo(right, ruleY).strokeColor('#8a4b24').lineWidth(1.4).stroke().lineWidth(1);
+  return ruleY;
 }
 
-function drawInfoBoxes(doc, settings, meta) {
+function drawInfoBoxes(doc, settings, meta, headerBottom = 128) {
   const left = doc.page.margins.left;
   const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const gap = 14;
   const boxWidth = (width - gap) / 2;
-  const y = 128;
+  const y = headerBottom + 16;
 
   const party = meta.party || {};
   doc.roundedRect(left, y, boxWidth, 88, 4).fillAndStroke('#f8fafc', '#e2e8f0');
@@ -292,8 +347,8 @@ function ensurePage(doc, y, height, meta, type) {
   return tableHeader(doc, 58, meta, type).nextY;
 }
 
-function drawItemsTable(doc, rows, settings, meta, type) {
-  let { widths, nextY: y } = tableHeader(doc, 232, meta, type);
+function drawItemsTable(doc, rows, settings, meta, type, tableTop = 248) {
+  let { widths, nextY: y } = tableHeader(doc, tableTop, meta, type);
   const left = doc.page.margins.left;
 
   rows.forEach((row, rowIndex) => {
@@ -305,14 +360,14 @@ function drawItemsTable(doc, rows, settings, meta, type) {
     const name = row.code ? `${row.name}\n${row.code}` : row.name;
     doc.text(name, x + 4, y + 5, { width: widths[0] - 8, height: rowHeight - 8 });
     x += widths[0];
-    doc.text(String(row.quantity), x + 4, y + 9, { width: widths[1] - 8, align: 'right' });
+    doc.text(row.quantityLabel || String(row.quantity), x + 4, y + 9, { width: widths[1] - 8, align: 'right' });
     x += widths[1];
     if (type === 'adjustment') {
       doc.text(text(row.movement).toUpperCase(), x + 4, y + 9, { width: widths[2] - 8, align: 'right' });
       x += widths[2];
       doc.text(row.code || '-', x + 4, y + 9, { width: widths[3] - 8, align: 'right' });
     } else {
-      [money(row.unitValue, settings), money(row.discount, settings), money(row.tax, settings), money(row.total, settings)].forEach((value, index) => {
+      [`${money(row.unitValue, settings)}${row.unitSuffix || ''}`, money(row.discount, settings), money(row.tax, settings), money(row.total, settings)].forEach((value, index) => {
         doc.text(value, x + 4, y + 9, { width: widths[index + 2] - 8, align: 'right' });
         x += widths[index + 2];
       });
@@ -338,6 +393,7 @@ function drawTotals(doc, y, record, settings, type) {
     ['Shipping', record.shipping],
     ['Grand total', record.grand_total],
   ];
+  if (type === 'purchase' && Number(record.returned_amount || 0) > 0.005) lines.push(['Return credits', -Number(record.returned_amount)]);
   if (type === 'sale' || type === 'purchase') lines.push(['Paid amount', record.paid_amount ?? record.received_amount]);
 
   lines.forEach(([label, value], index) => {
@@ -347,10 +403,14 @@ function drawTotals(doc, y, record, settings, type) {
     doc.fillColor(isTotal ? '#8a4b24' : '#111827').text(money(value, settings), valueX, y, { width: 110, align: 'right' });
     y += isTotal ? 28 : 20;
     if (index === lines.length - 1 && record.grand_total !== undefined) {
-      const balance = Number(record.grand_total || 0) - Number(record.paid_amount || record.received_amount || 0);
+      const balance = Number(record.grand_total || 0) - (type === 'purchase' ? Number(record.returned_amount || 0) : 0) - Number(record.paid_amount || record.received_amount || 0);
       if ((type === 'sale' || type === 'purchase') && balance > 0.005) {
         doc.fillColor('#b91c1c').font('Helvetica-Bold').text('Balance due', labelX, y, { width: 105 });
         doc.text(money(balance, settings), valueX, y, { width: 110, align: 'right' });
+        y += 20;
+      } else if (type === 'purchase' && balance < -0.005) {
+        doc.fillColor('#1d4ed8').font('Helvetica-Bold').text('Supplier credit / refund', labelX, y, { width: 105 });
+        doc.text(money(Math.abs(balance), settings), valueX, y, { width: 110, align: 'right' });
         y += 20;
       }
     }
@@ -382,9 +442,9 @@ async function createA4DocumentPdf(type, record, settings) {
   const rows = itemRows(type, record, meta);
   const doc = new PDFDocument({ size: 'A4', margin: 36, info: { Title: `${meta.title} ${record.reference_code || record.id}`, Author: settings.business_name } });
   const promise = collectPdf(doc);
-  drawBusinessHeader(doc, settings, meta, record);
-  drawInfoBoxes(doc, settings, meta);
-  let y = drawItemsTable(doc, rows, settings, meta, type);
+  const headerBottom = drawBusinessHeader(doc, settings, meta, record);
+  drawInfoBoxes(doc, settings, meta, headerBottom);
+  let y = drawItemsTable(doc, rows, settings, meta, type, headerBottom + 104);
   y = drawTotals(doc, y, record, settings, type);
   drawFooter(doc, settings, meta, record, y);
   doc.end();
@@ -394,12 +454,25 @@ async function createA4DocumentPdf(type, record, settings) {
 async function createReceiptPdf(record, settings) {
   const width = 226.77; // 80 mm
   const rowCount = Math.max((record.items || []).length, 1);
-  const height = Math.max(500, 330 + rowCount * 48);
+  const logoBuffer = decodeDataUri(settings.business_logo);
+  const height = Math.max(500, 330 + rowCount * 48) + (logoBuffer ? 50 : 0);
   const doc = new PDFDocument({ size: [width, height], margin: 12, info: { Title: `Receipt ${record.reference_code || record.id}` } });
   const promise = collectPdf(doc);
   const contentWidth = width - 24;
 
-  doc.font('Helvetica-Bold').fontSize(14).text(settings.business_name || 'Shanthi Electricals', { width: contentWidth, align: 'center' });
+  if (logoBuffer) {
+    try {
+      doc.image(logoBuffer, (width - 46) / 2, doc.y, { width: 46, height: 48 });
+      doc.y += 52;
+    } catch { /* corrupt logo, skip */ }
+  }
+
+  doc.font('Helvetica-Bold').fontSize(14).fillColor('#111827').text(settings.business_name || 'Shanthi Electricals', { width: contentWidth, align: 'center' });
+  const taglineLines = String(settings.business_tagline || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  if (taglineLines.length) {
+    doc.font('Helvetica-Oblique').fontSize(6.5).fillColor('#6b7280');
+    taglineLines.forEach((line) => doc.text(line, { width: contentWidth, align: 'center' }));
+  }
   doc.font('Helvetica').fontSize(7.5).fillColor('#333333');
   if (settings.business_address) doc.text(settings.business_address, { width: contentWidth, align: 'center' });
   if (settings.business_phone) doc.text(settings.business_phone, { width: contentWidth, align: 'center' });
@@ -419,13 +492,21 @@ async function createReceiptPdf(record, settings) {
     const itemName = item.item_name || product.name || (item.product_id ? `Product #${item.product_id}` : 'Manual item');
     const itemCode = item.item_code || product.code || '';
     const discount = Number(item.discount_amount || 0);
+    const unit = item.saleUnitRef;
+    const qtyLabel = unit && item.unit_quantity !== null && item.unit_quantity !== undefined
+      ? `${Number(item.unit_quantity)} ${unit.short_name || unit.name}`
+      : Number(item.quantity || 0);
 
-    doc.font('Helvetica-Bold').fontSize(7.5).text(itemName, { width: contentWidth });
-    if (itemCode) doc.font('Helvetica').fontSize(6.5).fillColor('#555555').text(itemCode, { width: contentWidth });
+    // Reset the cursor to the left margin: prior rows/lines in this function
+    // explicitly position text with a custom x (e.g. right-aligned amounts),
+    // and PDFKit keeps that as the new default x for calls that omit one.
+    doc.x = 12;
+    doc.font('Helvetica-Bold').fontSize(7.5).text(itemName, 12, doc.y, { width: contentWidth });
+    if (itemCode) { doc.x = 12; doc.font('Helvetica').fontSize(6.5).fillColor('#555555').text(itemCode, 12, doc.y, { width: contentWidth }); }
     doc.fillColor('#333333');
 
     const detailY = doc.y;
-    doc.font('Helvetica').fontSize(7.2).text(`${Number(item.quantity || 0)} × ${money(item.product_price, settings)}`, 12, detailY, { width: 125 });
+    doc.font('Helvetica').fontSize(7.2).text(`${qtyLabel} × ${money(item.product_price, settings)}`, 12, detailY, { width: 125 });
     doc.text(money(item.sub_total, settings), width - 92, detailY, { width: 80, align: 'right' });
     doc.y = detailY + 10;
 
@@ -457,8 +538,8 @@ async function createReceiptPdf(record, settings) {
   if (change > 0.005) receiptLine('Change', change);
 
   doc.moveDown(0.4).moveTo(12, doc.y).lineTo(width - 12, doc.y).dash(2, { space: 2 }).stroke().undash();
-  doc.moveDown(0.6).font('Helvetica').fontSize(7.5).text(settings.receipt_footer || 'Thank you.', { width: contentWidth, align: 'center' });
-  doc.text('Shanthi Electricals POS', { width: contentWidth, align: 'center' });
+  doc.moveDown(0.6).font('Helvetica').fontSize(7.5).text(settings.receipt_footer || 'Thank you.', 12, doc.y, { width: contentWidth, align: 'center' });
+  doc.text(`${settings.business_name || 'Shanthi Electricals'} POS`, 12, doc.y, { width: contentWidth, align: 'center' });
   doc.end();
   return promise;
 }

@@ -1,9 +1,10 @@
-const { Op } = require('sequelize');
+const { Op } = require('../database/mongoOrm');
 const {
   Product, ProductCategory, Brand, Unit, ManageStock, Warehouse,
-  MainProduct, VariationProduct, Variation, VariationType, ProductPriceHistory, User, Purchase, sequelize,
+  MainProduct, VariationProduct, Variation, VariationType, ProductPriceHistory, User, Purchase,
+  Adjustment, AdjustmentItem, sequelize,
 } = require('../models/associations');
-const { asyncHandler } = require('../utils/helpers');
+const { asyncHandler, generateReferenceCode } = require('../utils/helpers');
 const HttpError = require('../utils/httpError');
 const { applyProductPriceChange } = require('../services/productPriceService');
 const { generateUniqueProductCode, normalizeBarcodeInput, barcodeSymbolFor } = require('../utils/barcode');
@@ -14,6 +15,9 @@ const {
   finiteNumber,
 } = require('../utils/productPayload');
 const { normalizeAttributes, normalizeVariantRows, variantKey } = require('../utils/variantPayload');
+const { normalizeStockLevels, planStockReconciliation } = require('../utils/stockReconciliation');
+const { adjustStock } = require('../utils/stockService');
+const { todayISO } = require('../utils/date');
 
 const baseProductIncludes = [
   { model: ProductCategory },
@@ -40,6 +44,68 @@ const familyIncludeGraph = [
     ],
   },
 ];
+
+function userCanManageStock(user) {
+  const role = user?.Role;
+  return role?.name === 'admin' || (role?.permissions || []).includes('stock.manage');
+}
+
+function assertOpeningStockPermission(variantRows, user) {
+  const hasOpeningStock = (variantRows || []).some((variant) =>
+    (variant.initial_stock || []).some((row) => Number(row.quantity || 0) > 0));
+  if (hasOpeningStock && !userCanManageStock(user)) {
+    throw new HttpError(403, 'You do not have permission to enter opening stock.');
+  }
+}
+
+async function reconcileProductStock({ product, requestedRows, reason, userId, canManageStock = true, transaction }) {
+  const requested = normalizeStockLevels(requestedRows);
+  if (requested === null) return [];
+
+  const warehouseIds = [...new Set(requested.map((row) => row.warehouse_id))];
+  const warehouses = warehouseIds.length
+    ? await Warehouse.findAll({ where: { id: { [Op.in]: warehouseIds } }, transaction })
+    : [];
+  if (warehouses.length !== warehouseIds.length) {
+    throw new HttpError(422, 'One or more selected warehouses no longer exists. Refresh and try again.');
+  }
+
+  const currentRows = await ManageStock.findAll({
+    where: { product_id: product.id },
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  const changes = planStockReconciliation(currentRows, requested);
+  if (!changes.length) return [];
+  if (!canManageStock) throw new HttpError(403, 'You do not have permission to change stock quantities.');
+
+  const cleanReason = String(reason || '').trim();
+  if (!cleanReason) throw new HttpError(422, 'Enter a reason for the stock change.');
+  if (cleanReason.length > 1000) throw new HttpError(422, 'Stock change reason must not exceed 1000 characters.');
+
+  for (const change of changes) {
+    const adjustment = await Adjustment.create({
+      date: todayISO(),
+      warehouse_id: change.warehouse_id,
+      notes: `${cleanReason} (${product.name}: ${change.old_quantity} → ${change.quantity}; user ${userId || 'system'})`,
+      reference_code: generateReferenceCode('ADJ'),
+      created_by: userId || null,
+    }, { transaction });
+    await AdjustmentItem.create({
+      adjustment_id: adjustment.id,
+      product_id: product.id,
+      type: change.type,
+      quantity: Math.abs(change.delta),
+    }, { transaction });
+    await adjustStock({
+      productId: product.id,
+      warehouseId: change.warehouse_id,
+      delta: change.delta,
+      transaction,
+    });
+  }
+  return changes;
+}
 
 async function validateProductReferences(productData, transaction) {
   const checks = [];
@@ -325,6 +391,9 @@ const create = asyncHandler(async (req, res) => {
     }
     const productData = normalizeProductPayload(rawProductData);
     const initialStock = normalizeInitialStock(rawInitialStock);
+    if (initialStock.some((row) => Number(row.quantity) > 0) && !userCanManageStock(req.user)) {
+      throw new HttpError(403, 'You do not have permission to enter opening stock.');
+    }
 
     await validateProductReferences(productData, transaction);
 
@@ -373,6 +442,7 @@ const createFamily = asyncHandler(async (req, res) => {
   const familyId = await sequelize.transaction(async (transaction) => {
     const familyName = cleanFamilyText(req.body?.name, 'Product family name', { required: true });
     const variantRows = normalizeVariantRows(req.body?.variants);
+    assertOpeningStockPermission(variantRows, req.user);
     const commonData = buildCommonProductData(req.body || {});
     await validateProductReferences(commonData, transaction);
     await assertVariantCodesAvailable(variantRows, transaction);
@@ -410,6 +480,7 @@ const addFamilyVariants = asyncHandler(async (req, res) => {
     if (!source) throw new HttpError(422, 'This product family has no base variant to copy common product settings from.');
 
     const variantRows = normalizeVariantRows(req.body?.variants);
+    assertOpeningStockPermission(variantRows, req.user);
     const existingLabels = new Set(existingProducts.map((product) => String(product.variant_name || '').trim().toLowerCase()).filter(Boolean));
     const existingKeys = new Set(existingProducts.map((product) => variantKey(product.variant_attributes, product.variant_name)).filter(Boolean));
     for (const variant of variantRows) {
@@ -464,6 +535,7 @@ const convertProductToFamily = asyncHandler(async (req, res) => {
     const newVariants = Array.isArray(req.body?.variants) && req.body.variants.length
       ? normalizeVariantRows(req.body.variants)
       : [];
+    assertOpeningStockPermission(newVariants, req.user);
 
     const existingKey = variantKey(existingAttributes, existingLabel);
     for (const variant of newVariants) {
@@ -531,6 +603,8 @@ const update = asyncHandler(async (req, res) => {
 
     const {
       initial_stock: _ignoredInitialStock,
+      stock_levels: stockLevels,
+      stock_change_reason: stockChangeReason,
       price_change_reason: priceChangeReason,
       ...rawProductData
     } = req.body || {};
@@ -555,6 +629,14 @@ const update = asyncHandler(async (req, res) => {
       reason: priceChangeReason || 'Product details edited',
       source: 'product_edit',
       changedBy: req.user?.id,
+      transaction,
+    });
+    await reconcileProductStock({
+      product,
+      requestedRows: stockLevels,
+      reason: stockChangeReason,
+      userId: req.user?.id,
+      canManageStock: userCanManageStock(req.user),
       transaction,
     });
     return product;
@@ -621,20 +703,20 @@ const setStock = asyncHandler(async (req, res) => {
 
   const result = await sequelize.transaction(async (transaction) => {
     const [product, warehouse] = await Promise.all([
-      Product.findByPk(productId, { transaction }),
+      Product.findByPk(productId, { transaction, lock: transaction.LOCK.UPDATE }),
       Warehouse.findByPk(warehouseId, { transaction }),
     ]);
     if (!product) throw new HttpError(404, 'Product not found');
     if (!warehouse) throw new HttpError(422, 'The selected warehouse no longer exists.');
 
-    const [stock] = await ManageStock.findOrCreate({
-      where: { product_id: productId, warehouse_id: warehouseId },
-      defaults: { quantity: 0 },
+    await reconcileProductStock({
+      product,
+      requestedRows: [{ warehouse_id: warehouseId, quantity }],
+      reason: req.body?.reason,
+      userId: req.user?.id,
       transaction,
     });
-    stock.quantity = quantity;
-    await stock.save({ transaction });
-    return stock;
+    return ManageStock.findOne({ where: { product_id: productId, warehouse_id: warehouseId }, transaction });
   });
 
   res.json({ data: result });

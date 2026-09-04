@@ -1,4 +1,6 @@
-const { POSRegister, Sale, User, Warehouse } = require('../models/associations');
+const {
+  POSRegister, SalesPayment, CustomerPayment, User, Warehouse,
+} = require('../models/associations');
 const { asyncHandler } = require('../utils/helpers');
 
 const openRegister = asyncHandler(async (req, res) => {
@@ -20,13 +22,21 @@ const closeRegister = asyncHandler(async (req, res) => {
   if (!register) return res.status(404).json({ message: 'Not found' });
   if (register.status === 'closed') return res.status(400).json({ message: 'Register already closed' });
 
-  const cashSalesTotal = await Sale.sum('paid_amount', {
-    where: { pos_register_id: register.id, payment_type: 'cash' },
-  });
+  const [cashSalePayments, cashOpeningBalancePayments] = await Promise.all([
+    SalesPayment.sum('amount', {
+      where: { pos_register_id: register.id, paying_method: 'cash' },
+    }),
+    // Invoice portions of customer-level receipts also exist in
+    // sales_payments. Add only the opening-balance portion from the header.
+    CustomerPayment.sum('opening_balance_amount', {
+      where: { pos_register_id: register.id, paying_method: 'cash' },
+    }),
+  ]);
+  const cashReceived = Number(cashSalePayments || 0) + Number(cashOpeningBalancePayments || 0);
 
   register.status = 'closed';
   register.closed_at = new Date();
-  register.cash_in_hand = Number(register.opening_balance) + Number(cashSalesTotal || 0);
+  register.cash_in_hand = Number(register.opening_balance) + cashReceived;
   register.closing_balance = req.body.closing_balance != null ? req.body.closing_balance : register.cash_in_hand;
   register.notes = req.body.notes || register.notes;
   await register.save();

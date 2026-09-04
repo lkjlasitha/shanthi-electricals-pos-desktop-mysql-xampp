@@ -31,6 +31,7 @@ export default function Products() {
   const { confirm } = useDialog();
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('products.manage');
+  const canManageStock = hasPermission('stock.manage');
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [brands, setBrands] = useState([]);
@@ -38,10 +39,13 @@ export default function Products() {
   const [warehouses, setWarehouses] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [pageError, setPageError] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [initialStock, setInitialStock] = useState({});
+  const [stockReason, setStockReason] = useState('');
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [barcodeMessage, setBarcodeMessage] = useState('');
   const barcodeInputRef = useRef(null);
@@ -54,15 +58,21 @@ export default function Products() {
   const [savingPrice, setSavingPrice] = useState(false);
 
   const loadLookups = () => {
-    CategoriesAPI.list({ per_page: 200 }).then((r) => setCategories(r.data.data || r.data));
-    BrandsAPI.list({ per_page: 200 }).then((r) => setBrands(r.data.data || r.data));
-    UnitsAPI.list({ per_page: 200 }).then((r) => setUnits(r.data.data || r.data));
-    WarehousesAPI.list({ per_page: 200 }).then((r) => setWarehouses(r.data.data || r.data));
+    Promise.all([
+      CategoriesAPI.list({ per_page: 200 }), BrandsAPI.list({ per_page: 200 }),
+      UnitsAPI.list({ per_page: 200 }), WarehousesAPI.list({ per_page: 200 }),
+    ]).then(([categoryResponse, brandResponse, unitResponse, warehouseResponse]) => {
+      setCategories(categoryResponse.data.data || categoryResponse.data);
+      setBrands(brandResponse.data.data || brandResponse.data);
+      setUnits(unitResponse.data.data || unitResponse.data);
+      setWarehouses(warehouseResponse.data.data || warehouseResponse.data);
+    }).catch((requestError) => setPageError(requestError.response?.data?.message || 'Product form data could not be loaded.'));
   };
 
   const loadProducts = () => {
     setLoading(true);
-    ProductsAPI.list({ search, per_page: 100 }).then((r) => setProducts(r.data.data || r.data)).finally(() => setLoading(false));
+    setPageError('');
+    ProductsAPI.list({ search, per_page: 100 }).then((r) => setProducts(r.data.data || r.data)).catch((requestError) => setPageError(requestError.response?.data?.message || 'Products could not be loaded.')).finally(() => setLoading(false));
   };
 
   useEffect(loadLookups, []);
@@ -72,6 +82,7 @@ export default function Products() {
     setEditing(null);
     setForm(emptyForm);
     setInitialStock({});
+    setStockReason('');
     setError('');
     setBarcodeMessage('');
     setModalOpen(true);
@@ -94,6 +105,7 @@ export default function Products() {
     const stockMap = {};
     (product.ManageStocks || []).forEach((stock) => { stockMap[stock.warehouse_id] = stock.quantity; });
     setInitialStock(stockMap);
+    setStockReason('');
     setError('');
     setBarcodeMessage('');
     setModalOpen(true);
@@ -160,8 +172,21 @@ export default function Products() {
       payload.initial_stock = Object.entries(initialStock)
         .filter(([, quantity]) => quantity !== '')
         .map(([warehouse_id, quantity]) => ({ warehouse_id: Number(warehouse_id), quantity: Number(quantity) }));
+    } else if (canManageStock) {
+      const originalStock = new Map((editing.ManageStocks || []).map((row) => [Number(row.warehouse_id), Number(row.quantity || 0)]));
+      payload.stock_levels = warehouses.map((warehouse) => ({
+        warehouse_id: Number(warehouse.id),
+        quantity: Number(initialStock[warehouse.id] === '' || initialStock[warehouse.id] === undefined ? 0 : initialStock[warehouse.id]),
+      }));
+      const stockChanged = payload.stock_levels.some((row) => Math.abs(row.quantity - (originalStock.get(row.warehouse_id) || 0)) > 0.000001);
+      if (stockChanged && !stockReason.trim()) {
+        setError('Enter a reason for the stock change (stocktake, damage, correction, etc.).');
+        return;
+      }
+      payload.stock_change_reason = stockReason.trim();
     }
 
+    setSaving(true);
     try {
       if (editing) await ProductsAPI.update(editing.id, payload);
       else await ProductsAPI.create(payload);
@@ -170,6 +195,8 @@ export default function Products() {
       loadProducts();
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Save failed');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -202,8 +229,12 @@ export default function Products() {
       { title: 'Deactivate product', confirmLabel: 'Deactivate' }
     );
     if (!ok) return;
-    await ProductsAPI.remove(product.id);
-    loadProducts();
+    try {
+      await ProductsAPI.remove(product.id);
+      loadProducts();
+    } catch (requestError) {
+      setPageError(requestError.response?.data?.message || 'Product could not be deactivated.');
+    }
   };
 
   const newMargin = useMemo(() => Number(priceForm.new_price || 0) - Number(priceForm.new_cost || 0), [priceForm]);
@@ -222,6 +253,8 @@ export default function Products() {
           </>
         )}
       />
+
+      {pageError && <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{pageError}</div>}
 
       <Card className="p-4 mb-4">
         <input className={`${inputClass} max-w-xs`} placeholder="Search name or code…" value={search} onChange={(event) => setSearch(event.target.value)} />
@@ -360,20 +393,24 @@ export default function Products() {
           </div>
           <Field label="Notes"><textarea className={inputClass} rows={2} value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field>
 
-          {!editing && (
-            <Field label="Initial stock per warehouse">
+          <Field label={editing ? 'Stock per warehouse' : 'Initial stock per warehouse'}>
               <div className="space-y-2 border border-slate-200 rounded-md p-3">
                 {warehouses.map((warehouse) => (
                   <div key={warehouse.id} className="flex items-center justify-between gap-3 text-sm">
                     <span>{warehouse.name}</span>
-                    <input type="number" min="0" step="any" className={`${inputClass} w-28 py-1`} value={initialStock[warehouse.id] ?? ''} onChange={(event) => setInitialStock({ ...initialStock, [warehouse.id]: event.target.value })} />
+                    <input type="number" min="0" step="any" disabled={!canManageStock} className={`${inputClass} w-28 py-1 disabled:bg-slate-100`} value={initialStock[warehouse.id] ?? ''} onChange={(event) => setInitialStock({ ...initialStock, [warehouse.id]: event.target.value })} />
                   </div>
                 ))}
               </div>
+              <p className="mt-2 text-xs text-graphite-500">{canManageStock ? (editing ? 'Changing a quantity creates a dated stock adjustment so the correction remains auditable.' : 'Opening quantities create the initial warehouse balances.') : 'Your role can view stock but cannot change it.'}</p>
+          </Field>
+          {editing && canManageStock && (
+            <Field label="Reason for stock change">
+              <input className={inputClass} maxLength={1000} value={stockReason} onChange={(event) => setStockReason(event.target.value)} placeholder="Required only when a warehouse quantity changes" />
             </Field>
           )}
 
-          <div className="flex justify-end gap-2 mt-4"><Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button><Button type="submit">Save</Button></div>
+          <div className="flex justify-end gap-2 mt-4"><Button type="button" variant="secondary" onClick={() => setModalOpen(false)} disabled={saving}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button></div>
         </form>
       </Modal>
 

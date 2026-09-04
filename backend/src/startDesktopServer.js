@@ -3,7 +3,7 @@ async function startDesktopServer({ frontendDirectory, bootstrapAdmin } = {}) {
   if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET must be configured before the desktop backend starts.');
 
   // These modules must be loaded only after Electron applies the saved database
-  // configuration to process.env. Sequelize models bind to the connection at import time.
+  // configuration to process.env. MongoDB models share the configured client.
   const sequelize = require('./config/db');
   require('./models/associations');
   const { migrateSchema } = require('./config/schemaMigrator');

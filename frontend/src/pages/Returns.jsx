@@ -137,7 +137,7 @@ export default function Returns() {
       setReturnType(null);
       setSuccess(returnType === 'sale'
         ? 'Customer return created and stock was added back to the warehouse.'
-        : 'Supplier return created and stock was deducted from the warehouse.');
+        : 'Supplier return created, stock was deducted, and the credit was applied to the supplier bill.');
       await load();
     } catch (error) {
       setFormError(error.response?.data?.message || 'Return could not be created.');
@@ -146,7 +146,7 @@ export default function Returns() {
     }
   };
 
-  const sourceOptions = returnType === 'sale' ? sales : purchases.filter((purchase) => purchase.status === 'received');
+  const sourceOptions = returnType === 'sale' ? sales : purchases.filter((purchase) => ['partially_received', 'received'].includes(purchase.status));
   const sourceLabel = returnType === 'sale' ? 'sale invoice' : 'purchase';
   const sourceParty = sourceData?.source?.Customer?.name || sourceData?.source?.Supplier?.name || '—';
   const sourceWarehouse = sourceData?.source?.Warehouse?.name || '—';

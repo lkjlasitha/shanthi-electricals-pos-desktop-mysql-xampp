@@ -11,7 +11,7 @@ async function run() {
   try {
     await ensureDatabaseExists();
     await sequelize.authenticate();
-    console.log(`Database connection successful: ${config.host}:${config.port}/${config.database}`);
+    console.log(`MongoDB connection successful: ${config.database}`);
   } catch (error) {
     console.error(`Database check failed: ${formatDatabaseError(error)}`);
     process.exitCode = 1;

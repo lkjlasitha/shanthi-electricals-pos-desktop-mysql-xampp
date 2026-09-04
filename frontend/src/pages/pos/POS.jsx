@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   ProductsAPI, CustomersAPI, WarehousesAPI, SalesAPI,
-  QuotationsHoldsAPI, RegisterAPI, CategoriesAPI,
+  QuotationsHoldsAPI, RegisterAPI, CategoriesAPI, UnitsAPI,
 } from '../../api/endpoints';
 import { Button, Card, inputClass } from '../../components/ui.jsx';
 import { formatMoney, todayISO } from '../../utils/format';
 import { useAuth } from '../../context/AuthContext.jsx';
 import DocumentActions from '../../components/DocumentActions.jsx';
+import { compatibleUnits, convertUnits, defaultUnitId, findUnit } from '../../utils/units';
 
 function numericValue(value, fallback = 0) {
   if (value === '' || value === null || value === undefined) return fallback;
@@ -51,9 +52,16 @@ export default function POS() {
   const [lastReceipt, setLastReceipt] = useState(null);
   const [showQuickItem, setShowQuickItem] = useState(false);
   const [quickItem, setQuickItem] = useState({ name: '', price: '', quantity: '1' });
+  const [units, setUnits] = useState([]);
   const barcodeInputRef = useRef(null);
   const quickItemNameRef = useRef(null);
   const manualLineSequence = useRef(0);
+
+  const loadCustomers = useCallback(() => {
+    CustomersAPI.listWithBalances()
+      .then((res) => setCustomers((res.data.data || []).filter((customer) => customer.is_active !== false)))
+      .catch(() => {});
+  }, []);
 
   const focusScanner = useCallback(({ select = false, force = false } = {}) => {
     window.requestAnimationFrame(() => {
@@ -73,9 +81,10 @@ export default function POS() {
   useEffect(() => {
     WarehousesAPI.list({ per_page: 100 }).then((res) => setWarehouses(res.data.data || res.data));
     CategoriesAPI.list({ per_page: 100 }).then((res) => setCategories(res.data.data || res.data));
-    CustomersAPI.listWithBalances().then((res) => setCustomers(res.data.data || []));
+    UnitsAPI.list({ per_page: 200 }).then((res) => setUnits(res.data.data || res.data)).catch(() => {});
+    loadCustomers();
     RegisterAPI.current().then((res) => setRegister(res.data.data)).catch(() => {});
-  }, []);
+  }, [loadCustomers]);
 
   useEffect(() => {
     focusScanner({ force: true });
@@ -105,9 +114,22 @@ export default function POS() {
 
   const addToCart = (product) => {
     const lineId = `product-${product.id}`;
+    const lineUnits = compatibleUnits(product, units);
+    const initialUnit = lineUnits.length ? findUnit(defaultUnitId(product), units) || lineUnits[0] : null;
     setCart((previous) => {
       const existing = previous.find((line) => line.line_id === lineId);
       if (existing) {
+        if (existing.unit_id) {
+          const unit = findUnit(existing.unit_id, units);
+          const nextUnitQuantity = numericValue(existing.unit_quantity) + 1;
+          return previous.map((line) => line.line_id === lineId
+            ? {
+              ...line,
+              unit_quantity: String(nextUnitQuantity),
+              quantity: String(convertUnits(nextUnitQuantity, unit, product.stockUnit)),
+            }
+            : line);
+        }
         return previous.map((line) => line.line_id === lineId
           ? { ...line, quantity: String(numericValue(line.quantity) + 1) }
           : line);
@@ -119,6 +141,12 @@ export default function POS() {
         item_name: product.name,
         item_code: product.code || '',
         quantity: '1',
+        // For length-based products (wire/cable), unit_id/unit_quantity track
+        // what the cashier actually typed (e.g. "5" while unit = Foot); the
+        // `quantity` above always stays in the product's stock unit (meters)
+        // so pricing, stock deduction, and profit reports need no changes.
+        unit_id: initialUnit ? initialUnit.id : null,
+        unit_quantity: initialUnit ? '1' : null,
         // The cashier may change `price` for this bill only. The catalogue price
         // and product cost are retained separately for reset and profit display.
         price: String(product.product_price ?? 0),
@@ -132,6 +160,24 @@ export default function POS() {
     });
     setMessage(`${product.name} added to the cart.`);
     setMessageType('success');
+  };
+
+  // Called when the cashier changes the Length input or the unit dropdown for
+  // a length-based cart line (e.g. wire sold in feet). Keeps `quantity`
+  // (stock unit) and `unit_quantity`/`unit_id` (what was actually typed) in
+  // sync so pricing/stock stay correct while the invoice still shows "5 ft".
+  const updateLineUnit = (lineId, { unitQuantity, unitId }) => {
+    setCart((previous) => previous.map((line) => {
+      if (line.line_id !== lineId) return line;
+      const product = line.product;
+      const nextUnitId = unitId !== undefined ? unitId : line.unit_id;
+      const nextUnitQuantity = unitQuantity !== undefined ? unitQuantity : line.unit_quantity;
+      const unit = findUnit(nextUnitId, units);
+      const quantity = product?.stockUnit
+        ? convertUnits(numericValue(nextUnitQuantity), unit, product.stockUnit)
+        : numericValue(nextUnitQuantity);
+      return { ...line, unit_id: nextUnitId, unit_quantity: nextUnitQuantity, quantity: String(quantity) };
+    }));
   };
 
   const addQuickItem = (event) => {
@@ -262,6 +308,14 @@ export default function POS() {
     [subTotal, orderDiscount, taxRate]
   );
   const grandTotal = Math.max(0, subTotal - orderDiscount + orderTaxAmount);
+  const selectedCustomer = customers.find((customer) => String(customer.id) === String(customerId));
+  const plannedPaidAmount = receivedAmount === ''
+    ? (paymentType === 'credit' ? 0 : grandTotal)
+    : Math.min(numericValue(receivedAmount), grandTotal);
+  const projectedNewDebt = Math.max(0, grandTotal - plannedPaidAmount);
+  const projectedCustomerDue = numericValue(selectedCustomer?.total_due) + projectedNewDebt;
+  const projectedOverLimit = numericValue(selectedCustomer?.credit_limit) > 0
+    && projectedCustomerDue > numericValue(selectedCustomer?.credit_limit);
 
   const validateCart = () => {
     for (let index = 0; index < cart.length; index += 1) {
@@ -313,8 +367,8 @@ export default function POS() {
       discount: orderDiscount,
       tax_rate: numericValue(taxRate),
       payment_type: paymentType,
-      paid_amount: receivedAmount === '' ? grandTotal : Number(receivedAmount),
-      received_amount: receivedAmount === '' ? grandTotal : Number(receivedAmount),
+      paid_amount: plannedPaidAmount,
+      received_amount: receivedAmount === '' ? plannedPaidAmount : Number(receivedAmount),
       pos_register_id: register?.id || null,
       items: cart.map((line) => ({
         product_id: line.is_manual ? null : line.product?.id,
@@ -326,6 +380,8 @@ export default function POS() {
         // reads cost and standard price from the product record instead of
         // trusting cashier-supplied financial data.
         product_price: Number(line.price),
+        sale_unit_id: line.unit_id || null,
+        unit_quantity: line.unit_id ? numericValue(line.unit_quantity) : null,
         discount_type: line.discount_type,
         discount_value: numericValue(line.discount_value),
         tax_type: line.tax_type,
@@ -338,6 +394,7 @@ export default function POS() {
       setLastReceipt(response.data.data);
       resetCart();
       loadProducts();
+      loadCustomers();
       setMessage('Sale completed. The scanner is ready for the next bill.');
       setMessageType('success');
       focusScanner({ force: true });
@@ -518,17 +575,14 @@ export default function POS() {
             </option>
           ))}
         </select>
-        {(() => {
-          const selectedCustomer = customers.find((customer) => String(customer.id) === String(customerId));
-          if (!selectedCustomer || !(selectedCustomer.total_due > 0)) return null;
-          const overLimit = selectedCustomer.over_credit_limit;
-          return (
-            <div className={`mb-3 rounded-md border px-3 py-2 text-xs ${overLimit ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-              This customer already owes <strong>{formatMoney(selectedCustomer.total_due)}</strong> from previous bills.
-              {overLimit && ' They are over their credit limit — consider collecting payment before extending more credit.'}
-            </div>
-          );
-        })()}
+        {selectedCustomer && (numericValue(selectedCustomer.total_due) > 0 || projectedNewDebt > 0) && (
+          <div className={`mb-3 rounded-md border px-3 py-2 text-xs ${projectedOverLimit ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+            <div>Existing balance: <strong>{formatMoney(selectedCustomer.total_due)}</strong></div>
+            {projectedNewDebt > 0 && <div>This sale adds <strong>{formatMoney(projectedNewDebt)}</strong>; projected balance: <strong>{formatMoney(projectedCustomerDue)}</strong>.</div>}
+            {selectedCustomer.payment_terms_days !== undefined && projectedNewDebt > 0 && <div>Default payment terms: {selectedCustomer.payment_terms_days} day(s).</div>}
+            {projectedOverLimit && <div className="mt-1 font-medium">Warning: this would exceed the customer credit limit of {formatMoney(selectedCustomer.credit_limit)}.</div>}
+          </div>
+        )}
 
         {message && (
           <div className={`mb-3 rounded-md border px-3 py-2 text-sm ${messageType === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-100 bg-red-50 text-red-600'}`}>
@@ -557,18 +611,48 @@ export default function POS() {
                 </div>
 
                 <div className="mt-2 grid grid-cols-[5rem_minmax(7rem,1fr)_auto] items-end gap-2">
-                  <label className="block">
-                    <span className="mb-1 block text-[11px] font-medium text-graphite-500">Qty</span>
-                    <input
-                      aria-label={`Quantity for ${line.item_name}`}
-                      type="number"
-                      min="0.01"
-                      step="any"
-                      className={inputClass + ' w-full py-1'}
-                      value={line.quantity}
-                      onChange={(event) => updateLine(line.line_id, { quantity: event.target.value })}
-                    />
-                  </label>
+                  {line.unit_id ? (
+                    <label className="col-span-1 block">
+                      <span className="mb-1 block text-[11px] font-medium text-graphite-500">Length</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          aria-label={`Length for ${line.item_name}`}
+                          type="number"
+                          min="0.01"
+                          step="any"
+                          className={inputClass + ' w-full py-1'}
+                          value={line.unit_quantity ?? ''}
+                          onChange={(event) => updateLineUnit(line.line_id, { unitQuantity: event.target.value })}
+                        />
+                        <select
+                          aria-label={`Unit for ${line.item_name}`}
+                          className={inputClass + ' w-auto py-1 text-xs'}
+                          value={line.unit_id}
+                          onChange={(event) => updateLineUnit(line.line_id, { unitId: Number(event.target.value) })}
+                        >
+                          {compatibleUnits(line.product, units).map((unit) => (
+                            <option key={unit.id} value={unit.id}>{unit.short_name || unit.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <span className="mt-1 block text-[10px] text-graphite-400">
+                        = {Number(line.quantity || 0).toLocaleString('en-LK', { maximumFractionDigits: 3 })} {line.product?.stockUnit?.short_name || line.product?.stockUnit?.name}
+                      </span>
+                    </label>
+                  ) : (
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] font-medium text-graphite-500">Qty</span>
+                      <input
+                        aria-label={`Quantity for ${line.item_name}`}
+                        type="number"
+                        min="0.01"
+                        step="any"
+                        className={inputClass + ' w-full py-1'}
+                        value={line.quantity}
+                        onChange={(event) => updateLine(line.line_id, { quantity: event.target.value })}
+                      />
+                    </label>
+                  )}
                   <label className="block">
                     <span className="mb-1 flex items-center gap-1 text-[11px] font-medium text-graphite-500">
                       Sale price for this bill
@@ -698,7 +782,11 @@ export default function POS() {
             </p>
           )}
 
-          <select className={inputClass} value={paymentType} onChange={(event) => setPaymentType(event.target.value)}>
+          <select className={inputClass} value={paymentType} onChange={(event) => {
+            const method = event.target.value;
+            setPaymentType(method);
+            if (method === 'credit' && receivedAmount === '') setReceivedAmount('0');
+          }}>
             <option value="cash">Cash</option>
             <option value="card">Card</option>
             <option value="bank_transfer">Bank Transfer</option>
@@ -709,7 +797,7 @@ export default function POS() {
             min="0"
             step="any"
             className={inputClass}
-            placeholder={`Amount received (default: ${grandTotal.toFixed(2)})`}
+            placeholder={paymentType === 'credit' ? 'Deposit received (0 for pay later)' : `Cash/card received (default: ${grandTotal.toFixed(2)})`}
             value={receivedAmount}
             onChange={(event) => setReceivedAmount(event.target.value)}
           />

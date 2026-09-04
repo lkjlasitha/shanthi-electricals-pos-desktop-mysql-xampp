@@ -1,4 +1,4 @@
-const { Op, QueryTypes } = require('sequelize');
+const { Op } = require('../database/mongoOrm');
 const {
   SaleReturn, SaleReturnItem, Sale, SaleItem, Customer, Warehouse,
   PurchaseReturn, PurchaseReturnItem, Purchase, PurchaseItem, Supplier,
@@ -9,6 +9,7 @@ const { adjustStock } = require('../utils/stockService');
 const HttpError = require('../utils/httpError');
 const { positiveInteger, normalizeRequestedItems, prepareReturnItems } = require('../utils/returnPayload');
 const { todayISO } = require('../utils/date');
+const { computePurchaseBalance } = require('../utils/purchasePipeline');
 
 function aggregateSourceItems(items, valueField) {
   const rows = new Map();
@@ -31,19 +32,17 @@ function aggregateSourceItems(items, valueField) {
 
 async function returnedQuantities(kind, sourceId, transaction) {
   const saleMode = kind === 'sale';
-  const returnTable = saleMode ? 'sale_returns' : 'purchase_returns';
-  const itemTable = saleMode ? 'sale_return_items' : 'purchase_return_items';
+  const ReturnModel = saleMode ? SaleReturn : PurchaseReturn;
+  const ItemModel = saleMode ? SaleReturnItem : PurchaseReturnItem;
   const returnForeignKey = saleMode ? 'sale_return_id' : 'purchase_return_id';
   const sourceForeignKey = saleMode ? 'sale_id' : 'purchase_id';
-
-  const rows = await sequelize.query(
-    `SELECT ri.product_id, COALESCE(SUM(ri.quantity), 0) AS returned_quantity ` +
-    `FROM \`${itemTable}\` ri INNER JOIN \`${returnTable}\` r ON r.id = ri.\`${returnForeignKey}\` ` +
-    `WHERE r.\`${sourceForeignKey}\` = :sourceId GROUP BY ri.product_id`,
-    { type: QueryTypes.SELECT, replacements: { sourceId }, transaction }
-  );
-
-  return new Map(rows.map((row) => [Number(row.product_id), Number(row.returned_quantity || 0)]));
+  const returns = await ReturnModel.findAll({ where: { [sourceForeignKey]: sourceId }, transaction });
+  const returnIds = returns.map((row) => row.id);
+  if (!returnIds.length) return new Map();
+  const items = await ItemModel.findAll({ where: { [returnForeignKey]: { [Op.in]: returnIds } }, transaction });
+  const totals = new Map();
+  for (const item of items) totals.set(Number(item.product_id), (totals.get(Number(item.product_id)) || 0) + Number(item.quantity || 0));
+  return totals;
 }
 
 async function buildSaleReturnable(saleId, transaction) {
@@ -91,8 +90,8 @@ async function buildPurchaseReturnable(purchaseId, transaction) {
     ...(transaction ? { lock: transaction.LOCK.UPDATE } : {}),
   });
   if (!purchase) throw new HttpError(404, 'Purchase document not found.');
-  if (purchase.status !== 'received') {
-    throw new HttpError(422, 'Only received purchases can be returned to a supplier because ordered or pending purchases have not increased stock.');
+  if (!['partially_received', 'received'].includes(purchase.status)) {
+    throw new HttpError(422, 'Only goods that have been received can be returned to a supplier.');
   }
 
   const items = await PurchaseItem.findAll({
@@ -102,7 +101,25 @@ async function buildPurchaseReturnable(purchaseId, transaction) {
     ...(transaction ? { lock: transaction.LOCK.UPDATE } : {}),
   });
   if (!items.length) throw new HttpError(422, 'This purchase has no line items that can be returned.');
-  const source = aggregateSourceItems(items, 'product_cost');
+  // Return eligibility follows actual receipts, not the original ordered
+  // quantity. This prevents a partially-delivered bill from returning stock
+  // that never entered the warehouse.
+  const receivedItems = items
+    .filter((item) => Number(item.received_quantity || 0) > 0)
+    .map((item) => {
+      const ordered = Number(item.quantity || 0);
+      const received = Number(item.received_quantity || 0);
+      const unitCost = ordered > 0 ? Number(item.sub_total || 0) / ordered : Number(item.product_cost || 0);
+      return {
+        product_id: item.product_id,
+        quantity: received,
+        sub_total: unitCost * received,
+        product_cost: unitCost,
+        Product: item.Product,
+      };
+    });
+  if (!receivedItems.length) throw new HttpError(422, 'This purchase has no received stock that can be returned.');
+  const source = aggregateSourceItems(receivedItems, 'product_cost');
   const alreadyReturned = await returnedQuantities('purchase', purchase.id, transaction);
 
   const returnableItems = [...source.values()].map((item) => {
@@ -237,11 +254,20 @@ const createPurchaseReturn = asyncHandler(async (req, res) => {
       }, { transaction });
     }
 
+    // A supplier return is also a credit against the bill. Keep the gross bill
+    // immutable for audit, but reduce what is still payable and surface any
+    // overpayment as supplier credit instead of asking for more money.
+    const purchase = returnable.source;
+    const remainingBillValue = Math.max(0, Number(purchase.grand_total || 0) - Number(purchase.returned_amount || 0));
+    purchase.returned_amount = Number(purchase.returned_amount || 0) + Math.min(grandTotal, remainingBillValue);
+    purchase.payment_status = computePurchaseBalance(purchase).payment_status;
+    await purchase.save({ transaction });
+
     return purchaseReturn;
   });
 
   const full = await PurchaseReturn.findByPk(result.id, { include: purchaseReturnInclude });
-  res.status(201).json({ data: full, message: 'Purchase return created and stock deducted.' });
+  res.status(201).json({ data: full, message: 'Purchase return created, stock deducted, and supplier bill credit applied.' });
 });
 
 module.exports = {

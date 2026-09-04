@@ -1,4 +1,4 @@
-const { DataTypes } = require('sequelize');
+const { DataTypes } = require('../database/mongoOrm');
 const sequelize = require('../config/db');
 
 /* ============================================================
@@ -87,6 +87,10 @@ const Customer = sequelize.define('Customer', {
   // credit ceiling so the cashier is warned before a regular over-extends.
   customer_type: { type: DataTypes.ENUM('retail', 'wholesale', 'credit'), defaultValue: 'retail' },
   credit_limit: { type: DataTypes.DOUBLE, allowNull: true, defaultValue: 0 }, // 0/NULL = no limit enforced
+  // Default number of days before a partially-paid/credit invoice is due.
+  // Individual invoices keep their own due-date snapshot so changing these
+  // terms later does not rewrite historical receivables.
+  payment_terms_days: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
   is_active: { type: DataTypes.BOOLEAN, defaultValue: true },
   notes: { type: DataTypes.TEXT, allowNull: true }, // free-form notes shown on the customer profile
 }, { tableName: 'customers' });
@@ -99,12 +103,16 @@ const Supplier = sequelize.define('Supplier', {
   city: { type: DataTypes.STRING, allowNull: true },
   address: { type: DataTypes.TEXT, allowNull: true },
   tax_number: { type: DataTypes.STRING, allowNull: true }, // supplier VAT/BIN
+  // Default credit period for new supplier bills. Every purchase stores its
+  // own due-date snapshot, so changing these terms does not rewrite history.
+  payment_terms_days: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
 }, { tableName: 'suppliers' });
 
-// Single-row key/value business settings table
+// Single-row key/value business settings table.
+// The value can also store the base64 business logo data URI.
 const Setting = sequelize.define('Setting', {
   key: { type: DataTypes.STRING, allowNull: false, unique: true },
-  value: { type: DataTypes.TEXT, allowNull: true },
+  value: { type: DataTypes.TEXT('long'), allowNull: true },
 }, { tableName: 'settings' });
 
 module.exports = {

@@ -11,6 +11,7 @@ export default function Adjustments() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const [date, setDate] = useState(todayISO());
   const [warehouseId, setWarehouseId] = useState('');
@@ -18,7 +19,7 @@ export default function Adjustments() {
   const [items, setItems] = useState([]);
   const [productToAdd, setProductToAdd] = useState('');
 
-  const load = () => { setLoading(true); StockAPI.listAdjustments().then((r) => setAdjustments(r.data.data || r.data)).finally(() => setLoading(false)); };
+  const load = () => { setLoading(true); StockAPI.listAdjustments().then((r) => setAdjustments(r.data.data || r.data)).catch((requestError) => setError(requestError.response?.data?.message || 'Adjustments could not be loaded.')).finally(() => setLoading(false)); };
   useEffect(() => {
     load();
     WarehousesAPI.list({ per_page: 200 }).then((r) => setWarehouses(r.data.data || r.data));
@@ -28,14 +29,18 @@ export default function Adjustments() {
   const addItem = () => {
     const product = products.find((p) => String(p.id) === String(productToAdd));
     if (!product) return;
-    setItems((prev) => [...prev, { product, type: 'subtraction', quantity: 1 }]);
+    setItems((prev) => prev.some((item) => item.product.id === product.id)
+      ? prev.map((item) => item.product.id === product.id ? { ...item, quantity: Number(item.quantity || 0) + 1 } : item)
+      : [...prev, { product, type: 'subtraction', quantity: 1 }]);
     setProductToAdd('');
   };
 
   const submit = async (e) => {
     e.preventDefault();
+    if (saving) return;
     setError('');
     if (!items.length) return setError('Add at least one item.');
+    setSaving(true);
     try {
       await StockAPI.createAdjustment({
         date, warehouse_id: warehouseId, notes,
@@ -46,6 +51,8 @@ export default function Adjustments() {
       load();
     } catch (e2) {
       setError(e2.response?.data?.message || 'Adjustment failed');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -116,8 +123,8 @@ export default function Adjustments() {
           </div>
           <Field label="Notes / reason"><textarea required className={inputClass} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button type="submit">Save Adjustment</Button>
+            <Button type="button" variant="secondary" disabled={saving} onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Adjustment'}</Button>
           </div>
         </form>
       </Modal>

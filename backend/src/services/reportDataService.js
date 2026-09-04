@@ -1,9 +1,20 @@
 const { todayISO } = require('../utils/date');
-const { Op, fn, col } = require('sequelize');
+const { Op } = require('../database/mongoOrm');
 const {
   Sale, SaleItem, Purchase, Product, ManageStock, Warehouse, ProductCategory,
 } = require('../models/associations');
 const HttpError = require('../utils/httpError');
+
+function groupedTotals(rows, fields) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const current = grouped.get(row.date) || { date: row.date, count: 0 };
+    current.count += 1;
+    for (const field of fields) current[field] = Number(current[field] || 0) + Number(row[field] || 0);
+    grouped.set(row.date, current);
+  }
+  return [...grouped.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
 
 function dateRange(query = {}) {
   const from = query.from_date || '1970-01-01';
@@ -16,24 +27,13 @@ async function salesReportData(query = {}) {
   const range = dateRange(query);
   const where = { date: range.condition };
   if (query.warehouse_id) where.warehouse_id = query.warehouse_id;
-  const rows = await Sale.findAll({
-    where,
-    attributes: [
-      'date',
-      [fn('SUM', col('Sale.grand_total')), 'total_sales'],
-      [fn('SUM', col('Sale.paid_amount')), 'total_paid'],
-      [fn('COUNT', col('Sale.id')), 'invoice_count'],
-    ],
-    group: ['Sale.date'],
-    order: [['date', 'ASC']],
-    raw: true,
-  });
+  const rows = groupedTotals(await Sale.findAll({ where }), ['grand_total', 'paid_amount']);
   const data = rows.map((row) => ({
     date: row.date,
-    invoice_count: Number(row.invoice_count || 0),
-    total_sales: Number(row.total_sales || 0),
-    total_paid: Number(row.total_paid || 0),
-    balance: Number(row.total_sales || 0) - Number(row.total_paid || 0),
+    invoice_count: Number(row.count || 0),
+    total_sales: Number(row.grand_total || 0),
+    total_paid: Number(row.paid_amount || 0),
+    balance: Number(row.grand_total || 0) - Number(row.paid_amount || 0),
   }));
   return {
     key: 'sales', title: 'Sales Report', range,
@@ -56,23 +56,17 @@ async function salesReportData(query = {}) {
 
 async function purchasesReportData(query = {}) {
   const range = dateRange(query);
-  const where = { date: range.condition };
+  const where = { date: range.condition, status: { [Op.ne]: 'cancelled' } };
   if (query.warehouse_id) where.warehouse_id = query.warehouse_id;
-  const rows = await Purchase.findAll({
-    where,
-    attributes: [
-      'date',
-      [fn('SUM', col('Purchase.grand_total')), 'total_purchases'],
-      [fn('COUNT', col('Purchase.id')), 'purchase_count'],
-    ],
-    group: ['Purchase.date'],
-    order: [['date', 'ASC']],
-    raw: true,
-  });
+  const rows = groupedTotals(await Purchase.findAll({ where }), ['grand_total', 'returned_amount', 'paid_amount']);
   const data = rows.map((row) => ({
     date: row.date,
-    purchase_count: Number(row.purchase_count || 0),
-    total_purchases: Number(row.total_purchases || 0),
+    purchase_count: Number(row.count || 0),
+    total_purchases: Number(row.grand_total || 0),
+    total_returns: Number(row.returned_amount || 0),
+    net_purchases: Math.max(0, Number(row.grand_total || 0) - Number(row.returned_amount || 0)),
+    total_paid: Number(row.paid_amount || 0),
+    outstanding: Math.max(0, Number(row.grand_total || 0) - Number(row.returned_amount || 0) - Number(row.paid_amount || 0)),
   }));
   return {
     key: 'purchases', title: 'Purchases Report', range,
@@ -80,11 +74,19 @@ async function purchasesReportData(query = {}) {
       { key: 'date', label: 'Date', type: 'date' },
       { key: 'purchase_count', label: 'Purchases', type: 'number' },
       { key: 'total_purchases', label: 'Total Purchases', type: 'money' },
+      { key: 'total_returns', label: 'Return Credits', type: 'money' },
+      { key: 'net_purchases', label: 'Net Purchases', type: 'money' },
+      { key: 'total_paid', label: 'Paid', type: 'money' },
+      { key: 'outstanding', label: 'Outstanding', type: 'money' },
     ],
     rows: data,
     totals: {
       purchase_count: data.reduce((sum, row) => sum + row.purchase_count, 0),
       total_purchases: data.reduce((sum, row) => sum + row.total_purchases, 0),
+      total_returns: data.reduce((sum, row) => sum + row.total_returns, 0),
+      net_purchases: data.reduce((sum, row) => sum + row.net_purchases, 0),
+      total_paid: data.reduce((sum, row) => sum + row.total_paid, 0),
+      outstanding: data.reduce((sum, row) => sum + row.outstanding, 0),
     },
   };
 }
@@ -94,21 +96,19 @@ async function productSalesReportData(query = {}) {
   const saleWhere = { date: range.condition };
   if (query.warehouse_id) saleWhere.warehouse_id = query.warehouse_id;
   const limit = Math.min(Math.max(parseInt(query.limit || '200', 10) || 200, 1), 1000);
-  const aggregates = await SaleItem.findAll({
-    // Manual one-off bill items are revenue, but are not catalogue products and
-    // should not distort the best-selling inventory report.
-    where: { product_id: { [Op.ne]: null } },
-    include: [{ model: Sale, attributes: [], where: saleWhere, required: true }],
-    attributes: [
-      'product_id',
-      [fn('SUM', col('SaleItem.quantity')), 'total_quantity_sold'],
-      [fn('SUM', col('SaleItem.sub_total')), 'total_revenue'],
-    ],
-    group: ['SaleItem.product_id'],
-    order: [[fn('SUM', col('SaleItem.sub_total')), 'DESC']],
-    limit,
-    raw: true,
-  });
+  const sales = await Sale.findAll({ where: saleWhere, attributes: ['id'] });
+  const saleIds = sales.map((sale) => sale.id);
+  const lineItems = saleIds.length
+    ? await SaleItem.findAll({ where: { sale_id: { [Op.in]: saleIds }, product_id: { [Op.ne]: null } } })
+    : [];
+  const byProduct = new Map();
+  for (const item of lineItems) {
+    const current = byProduct.get(Number(item.product_id)) || { product_id: Number(item.product_id), total_quantity_sold: 0, total_revenue: 0 };
+    current.total_quantity_sold += Number(item.quantity || 0);
+    current.total_revenue += Number(item.sub_total || 0);
+    byProduct.set(current.product_id, current);
+  }
+  const aggregates = [...byProduct.values()].sort((a, b) => b.total_revenue - a.total_revenue).slice(0, limit);
   const productIds = aggregates.map((row) => Number(row.product_id)).filter(Boolean);
   const products = productIds.length
     ? await Product.findAll({

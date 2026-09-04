@@ -1,7 +1,7 @@
-const { Op } = require('sequelize');
+const { Op } = require('../database/mongoOrm');
 const {
-  Quotation, QuotationItem, Hold, HoldItem, Customer, Warehouse, Product,
-  Sale, SaleItem, SalesPayment, sequelize,
+  Quotation, QuotationItem, Hold, HoldItem, Customer, Warehouse, Product, Unit,
+  Sale, SaleItem, SalesPayment, POSRegister, sequelize,
 } = require('../models/associations');
 const { asyncHandler, generateReferenceCode } = require('../utils/helpers');
 const { adjustStock } = require('../utils/stockService');
@@ -12,12 +12,28 @@ const {
   nonNegativeNumber,
   applyProductFinancialSnapshot,
 } = require('../utils/saleLine');
+const { computeInitialPayment, resolveDueDate } = require('../utils/payment');
 
 /* ---------------- Quotations ---------------- */
 
-const quotationInclude = [Customer, Warehouse, { model: QuotationItem, as: 'items', include: [Product] }];
+const quotationInclude = [
+  Customer,
+  Warehouse,
+  {
+    model: QuotationItem,
+    as: 'items',
+    include: [
+      { model: Product, include: [{ model: Unit, as: 'stockUnit' }, { model: Unit, as: 'saleUnit' }] },
+      { model: Unit, as: 'saleUnitRef' },
+    ],
+  },
+];
 
 const listQuotations = asyncHandler(async (req, res) => {
+  await Quotation.update(
+    { status: 'expired' },
+    { where: { status: 'sent', valid_until: { [Op.lt]: todayISO() } } }
+  );
   const where = {};
   if (req.query.customer_id) where.customer_id = req.query.customer_id;
   if (req.query.warehouse_id) where.warehouse_id = req.query.warehouse_id;
@@ -27,6 +43,10 @@ const listQuotations = asyncHandler(async (req, res) => {
 });
 
 const getQuotation = asyncHandler(async (req, res) => {
+  await Quotation.update(
+    { status: 'expired' },
+    { where: { id: req.params.id, status: 'sent', valid_until: { [Op.lt]: todayISO() } } }
+  );
   const quotation = await Quotation.findByPk(req.params.id, { include: quotationInclude });
   if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
   res.json({ data: quotation });
@@ -46,11 +66,11 @@ async function buildQuotationLines(items, transaction) {
   const productIds = [...new Set(computedItems.map((item) => item.product_id).filter(Boolean))];
 
   const products = productIds.length
-    ? await Product.findAll({ where: { id: { [Op.in]: productIds } }, transaction })
+    ? await Product.findAll({ where: { id: { [Op.in]: productIds }, is_active: true }, transaction })
     : [];
 
   if (products.length !== productIds.length) {
-    throw new HttpError(422, 'One or more selected products no longer exists. Refresh and try again.');
+    throw new HttpError(422, 'One or more selected products no longer exists or is inactive. Refresh and try again.');
   }
 
   const productsById = new Map(products.map((product) => [Number(product.id), product]));
@@ -65,6 +85,14 @@ async function buildQuotationLines(items, transaction) {
   }
 
   return { computedItems, subTotal };
+}
+
+async function validateQuotationParties(customerId, warehouseId, transaction) {
+  const customer = await Customer.findByPk(customerId, { transaction });
+  if (!customer || customer.is_active === false) throw new HttpError(422, 'Select an active customer for this quotation.');
+  const warehouse = await Warehouse.findByPk(warehouseId, { transaction });
+  if (!warehouse) throw new HttpError(422, 'The selected warehouse no longer exists.');
+  return { customer, warehouse };
 }
 
 function computeOrderTotals(body, subTotal) {
@@ -83,6 +111,7 @@ const createQuotation = asyncHandler(async (req, res) => {
   if (!body.warehouse_id) throw new HttpError(422, 'Select a warehouse for this quotation.');
 
   const result = await sequelize.transaction(async (t) => {
+    await validateQuotationParties(body.customer_id, body.warehouse_id, t);
     const { computedItems, subTotal } = await buildQuotationLines(body.items, t);
     const { discount, shipping, taxRate, taxAmount, grandTotal } = computeOrderTotals(body, subTotal);
 
@@ -119,16 +148,19 @@ const updateQuotation = asyncHandler(async (req, res) => {
   const body = req.body || {};
   const existing = await Quotation.findByPk(req.params.id);
   if (!existing) return res.status(404).json({ message: 'Quotation not found' });
-  if (existing.status === 'converted') throw new HttpError(409, 'This quotation was already converted to a sale and can no longer be edited.');
+  if (existing.status !== 'sent') throw new HttpError(409, 'Only an open quotation can be edited. Reopen an expired quotation first if you need to revise it.');
 
   const result = await sequelize.transaction(async (t) => {
+    const customerId = body.customer_id || existing.customer_id;
+    const warehouseId = body.warehouse_id || existing.warehouse_id;
+    await validateQuotationParties(customerId, warehouseId, t);
     const { computedItems, subTotal } = await buildQuotationLines(body.items, t);
     const { discount, shipping, taxRate, taxAmount, grandTotal } = computeOrderTotals(body, subTotal);
 
     await existing.update({
       date: body.date || existing.date,
-      customer_id: body.customer_id || existing.customer_id,
-      warehouse_id: body.warehouse_id || existing.warehouse_id,
+      customer_id: customerId,
+      warehouse_id: warehouseId,
       valid_until: body.valid_until || null,
       tax_rate: taxRate,
       tax_amount: taxAmount,
@@ -155,16 +187,31 @@ const updateQuotation = asyncHandler(async (req, res) => {
 // records payment exactly like a normal POS checkout.
 const convertQuotationToSale = asyncHandler(async (req, res) => {
   const body = req.body || {};
-  const quotation = await Quotation.findByPk(req.params.id, {
-    include: [{ model: QuotationItem, as: 'items' }],
-  });
-  if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
-  if (quotation.status === 'converted') throw new HttpError(409, 'This quotation has already been converted to a sale.');
-  if (quotation.status === 'cancelled') throw new HttpError(409, 'This quotation was cancelled and cannot be converted.');
-  if (!quotation.items || !quotation.items.length) throw new HttpError(422, 'This quotation has no items to convert.');
-
   const result = await sequelize.transaction(async (t) => {
-    const productIds = [...new Set(quotation.items.map((item) => item.product_id).filter(Boolean))];
+    // Lock the quotation before checking status so two cashiers cannot convert
+    // the same quote into two invoices at the same moment.
+    const quotation = await Quotation.findByPk(req.params.id, { transaction: t, lock: t.LOCK.UPDATE });
+    if (!quotation) throw new HttpError(404, 'Quotation not found');
+    if (quotation.status !== 'sent') {
+      throw new HttpError(409, quotation.status === 'converted'
+        ? 'This quotation has already been converted to a sale.'
+        : 'Only an open quotation can be converted to a sale.');
+    }
+    if (quotation.valid_until && quotation.valid_until < todayISO()) {
+      throw new HttpError(409, 'This quotation has expired. Reopen it after confirming the prices before conversion.');
+    }
+
+    const quotationItems = await QuotationItem.findAll({
+      where: { quotation_id: quotation.id }, transaction: t, lock: t.LOCK.UPDATE,
+    });
+    if (!quotationItems.length) throw new HttpError(422, 'This quotation has no items to convert.');
+
+    const customer = await Customer.findByPk(quotation.customer_id, { transaction: t, lock: t.LOCK.SHARE });
+    if (!customer || customer.is_active === false) {
+      throw new HttpError(422, 'The quotation customer no longer exists or is inactive.');
+    }
+
+    const productIds = [...new Set(quotationItems.map((item) => item.product_id).filter(Boolean))];
     const products = await Product.findAll({
       where: { id: { [Op.in]: productIds }, is_active: true },
       transaction: t,
@@ -176,7 +223,7 @@ const convertQuotationToSale = asyncHandler(async (req, res) => {
     const productsById = new Map(products.map((product) => [Number(product.id), product]));
 
     let subTotal = 0;
-    const computedItems = quotation.items.map((quotationItem, index) => {
+    const computedItems = quotationItems.map((quotationItem, index) => {
       const product = productsById.get(Number(quotationItem.product_id));
       const line = computeSaleLine({
         product_id: quotationItem.product_id,
@@ -186,6 +233,8 @@ const convertQuotationToSale = asyncHandler(async (req, res) => {
         discount_value: quotationItem.discount_value || 0,
         tax_type: quotationItem.tax_type || 'none',
         tax_value: quotationItem.tax_value || 0,
+        sale_unit_id: quotationItem.sale_unit_id || null,
+        unit_quantity: quotationItem.unit_quantity,
       }, index);
       line.item_name = product.name;
       line.item_code = product.code || null;
@@ -201,27 +250,38 @@ const convertQuotationToSale = asyncHandler(async (req, res) => {
     const cappedDiscount = Math.min(discount, subTotal);
     const orderTaxAmount = ((subTotal - cappedDiscount) * taxRate) / 100;
     const grandTotal = subTotal - cappedDiscount + shipping + orderTaxAmount;
-
-    const paymentType = body.payment_type || 'cash';
-    const paidAmount = body.paid_amount === undefined || body.paid_amount === null || body.paid_amount === ''
-      ? grandTotal
-      : nonNegativeNumber(body.paid_amount, 'Paid amount');
-    const paymentStatus = paidAmount >= grandTotal ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid';
+    const payment = computeInitialPayment({
+      grand_total: grandTotal,
+      paid_amount: body.paid_amount,
+      received_amount: body.received_amount,
+      payment_type: body.payment_type,
+    });
+    const saleDate = todayISO();
+    const dueDate = resolveDueDate({
+      sale_date: saleDate,
+      due_date: body.due_date,
+      payment_status: payment.payment_status,
+      payment_terms_days: customer.payment_terms_days,
+    });
+    const activeRegister = req.user ? await POSRegister.findOne({
+      where: { user_id: req.user.id, warehouse_id: quotation.warehouse_id, status: 'open' }, transaction: t,
+    }) : null;
 
     const sale = await Sale.create({
-      date: todayISO(),
+      date: saleDate,
       customer_id: quotation.customer_id,
       warehouse_id: quotation.warehouse_id,
-      pos_register_id: body.pos_register_id || null,
+      pos_register_id: activeRegister?.id || null,
       tax_rate: taxRate,
       tax_amount: orderTaxAmount,
       discount: cappedDiscount,
       shipping,
       grand_total: grandTotal,
-      received_amount: paidAmount,
-      paid_amount: paidAmount,
-      payment_type: paymentType,
-      payment_status: paymentStatus,
+      received_amount: payment.received_amount,
+      paid_amount: payment.paid_amount,
+      payment_type: payment.payment_type,
+      payment_status: payment.payment_status,
+      due_date: dueDate,
       note: `Converted from quotation ${quotation.reference_code}.${quotation.note ? ` ${quotation.note}` : ''}`,
       reference_code: generateReferenceCode('INV'),
       created_by: req.user ? req.user.id : null,
@@ -237,13 +297,14 @@ const convertQuotationToSale = asyncHandler(async (req, res) => {
       });
     }
 
-    if (paidAmount > 0) {
+    if (payment.paid_amount > 0) {
       await SalesPayment.create({
         sale_id: sale.id,
-        amount: paidAmount,
-        paying_method: paymentType,
-        received_amount: paidAmount,
-        paid_on: todayISO(),
+        pos_register_id: activeRegister?.id || null,
+        amount: payment.paid_amount,
+        paying_method: payment.payment_type,
+        received_amount: payment.received_amount,
+        paid_on: saleDate,
       }, { transaction: t });
     }
 
@@ -265,9 +326,13 @@ const setQuotationStatus = asyncHandler(async (req, res) => {
   const quotation = await Quotation.findByPk(req.params.id);
   if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
   if (quotation.status === 'converted') throw new HttpError(409, 'A converted quotation cannot change status.');
+  if (quotation.status === 'cancelled') throw new HttpError(409, 'A cancelled quotation is final and cannot be reopened.');
   const status = req.body?.status;
   if (!['sent', 'expired', 'cancelled'].includes(status)) {
     throw new HttpError(422, 'Status must be one of: sent, expired, cancelled.');
+  }
+  if (status === 'sent' && quotation.status !== 'expired') {
+    throw new HttpError(422, 'Only an expired quotation can be reopened.');
   }
   quotation.status = status;
   await quotation.save();

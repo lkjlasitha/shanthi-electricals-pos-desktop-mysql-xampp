@@ -10,6 +10,7 @@ const {
   ProductCategory,
   Brand,
 } = require('../models/associations');
+const { getDefaultLogoDataUri } = require('../assets/defaultLogo');
 
 const PERMISSIONS = Object.freeze([
   'products.manage',
@@ -32,6 +33,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   business_email: '',
   business_address: 'Negombo, Western Province, Sri Lanka',
   business_tax_number: '',
+  business_tagline: 'Three Phase, Single Phase, Motor Winding, and AC/DC Spare Parts\nWater Pumps, Generators, Electrical Appliance Repair',
+  business_logo: getDefaultLogoDataUri(),
   default_currency: process.env.DEFAULT_CURRENCY_CODE || 'LKR',
   currency_symbol: process.env.DEFAULT_CURRENCY_SYMBOL || 'Rs.',
   default_tax_rate: '0',

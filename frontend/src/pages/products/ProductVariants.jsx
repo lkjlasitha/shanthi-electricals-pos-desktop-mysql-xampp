@@ -107,7 +107,7 @@ export default function ProductVariants() {
       const warehouseRows = warehouseResponse.data.data || warehouseResponse.data || [];
       setWarehouses(warehouseRows);
       if (warehouseRows.length) setSelectedWarehouse(String(warehouseRows[0].id));
-    });
+    }).catch((requestError) => setError(requestError.response?.data?.message || 'Product form data could not be loaded.'));
   }, []);
 
   useEffect(() => {

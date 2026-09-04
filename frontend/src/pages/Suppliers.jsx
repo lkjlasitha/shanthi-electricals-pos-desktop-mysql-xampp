@@ -16,6 +16,7 @@ export default function Suppliers() {
         { key: 'name', label: 'Name' },
         { key: 'phone', label: 'Phone' },
         { key: 'city', label: 'City' },
+        { key: 'payment_terms_days', label: 'Credit days' },
       ]}
       fields={[
         { name: 'name', label: 'Name', required: true },
@@ -24,6 +25,7 @@ export default function Suppliers() {
         { name: 'city', label: 'City' },
         { name: 'address', label: 'Address', type: 'textarea' },
         { name: 'tax_number', label: 'VAT/BIN' },
+        { name: 'payment_terms_days', label: 'Default payment terms (days)', type: 'number' },
       ]}
     />
   );

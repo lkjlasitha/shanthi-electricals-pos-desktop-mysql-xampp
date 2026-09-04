@@ -57,8 +57,12 @@ export const ExpensesAPI = crud('/expenses');
 
 export const PurchasesAPI = {
   list: (params) => api.get('/purchases', { params }),
+  summary: (params) => api.get('/purchases/summary', { params }),
   get: (id) => api.get(`/purchases/${id}`),
   create: (data) => api.post('/purchases', data),
+  receive: (id, data) => api.post(`/purchases/${id}/receive`, data),
+  addPayment: (id, data) => api.post(`/purchases/${id}/payments`, data),
+  cancel: (id, data) => api.post(`/purchases/${id}/cancel`, data),
 };
 
 export const SalesAPI = {

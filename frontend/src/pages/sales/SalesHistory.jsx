@@ -11,16 +11,19 @@ export default function SalesHistory() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
+  const [error, setError] = useState('');
 
   const load = () => {
     setLoading(true);
-    SalesAPI.list({ reference_code: search || undefined, per_page: 50 }).then((r) => setSales(r.data.data || r.data)).finally(() => setLoading(false));
+    setError('');
+    SalesAPI.list({ reference_code: search || undefined, per_page: 50 }).then((r) => setSales(r.data.data || r.data)).catch((requestError) => setError(requestError.response?.data?.message || 'Sales could not be loaded.')).finally(() => setLoading(false));
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [search]);
 
   return (
     <div>
       <PageHeader title="Sales History" subtitle="All completed POS sales." />
+      {error && <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
       <Card className="p-4 mb-4">
         <input className={inputClass + ' max-w-xs'} placeholder="Search by invoice ref…" value={search} onChange={(e) => setSearch(e.target.value)} />
       </Card>
@@ -41,7 +44,10 @@ export default function SalesHistory() {
                 <td className="px-4 py-2.5">{s.Customer?.name}</td>
                 <td className="px-4 py-2.5">{s.Warehouse?.name}</td>
                 <td className="px-4 py-2.5">{formatMoney(s.grand_total)}</td>
-                <td className="px-4 py-2.5 capitalize">{s.payment_status}</td>
+                <td className="px-4 py-2.5 capitalize">
+                  <div>{s.payment_status}</div>
+                  {s.payment_status !== 'paid' && <div className="text-[11px] normal-case text-amber-700">Due {formatMoney(Math.max(0, Number(s.grand_total) - Number(s.paid_amount)))}{s.due_date ? ` · ${formatDate(s.due_date)}` : ''}</div>}
+                </td>
                 <td className="px-4 py-2.5"><div className="flex justify-end"><DocumentActions type="sale" record={s} allowReceipt compact /></div></td>
               </tr>
             ))}
@@ -77,6 +83,11 @@ export default function SalesHistory() {
             </table>
             <div className="flex justify-between pt-2 border-t border-slate-200 font-display font-semibold text-base">
               <span>Total</span><span className="text-copper-600">{formatMoney(selected.grand_total)}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 rounded-md bg-slate-50 p-2 text-xs">
+              <div><span className="block text-graphite-500">Paid</span><strong>{formatMoney(selected.paid_amount)}</strong></div>
+              <div><span className="block text-graphite-500">Balance due</span><strong>{formatMoney(Math.max(0, Number(selected.grand_total) - Number(selected.paid_amount)))}</strong></div>
+              <div><span className="block text-graphite-500">Due date</span><strong>{selected.due_date ? formatDate(selected.due_date) : '—'}</strong></div>
             </div>
             <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
               <DocumentActions type="sale" record={selected} allowReceipt />

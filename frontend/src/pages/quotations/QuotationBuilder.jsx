@@ -1,12 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  QuotationsHoldsAPI, CustomersAPI, WarehousesAPI, ProductsAPI, CategoriesAPI,
+  QuotationsHoldsAPI, CustomersAPI, WarehousesAPI, ProductsAPI, CategoriesAPI, UnitsAPI,
 } from '../../api/endpoints';
-import { Button, Card, PageHeader, inputClass } from '../../components/ui.jsx';
+import {
+  Button, Card, Field, Modal, PageHeader, inputClass,
+} from '../../components/ui.jsx';
 import { formatMoney, todayISO } from '../../utils/format';
 import { useDialog } from '../../context/DialogContext.jsx';
 import DocumentActions from '../../components/DocumentActions.jsx';
+import { compatibleUnits, convertUnits, defaultUnitId, findUnit } from '../../utils/units';
 
 function numericValue(value, fallback = 0) {
   if (value === '' || value === null || value === undefined) return fallback;
@@ -45,13 +48,22 @@ export default function QuotationBuilder() {
   const [discount, setDiscount] = useState('0');
   const [taxRate, setTaxRate] = useState('0');
   const [shipping, setShipping] = useState('0');
+  const [convertOpen, setConvertOpen] = useState(false);
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState('');
+  const [convertMethod, setConvertMethod] = useState('cash');
+  const [convertPaid, setConvertPaid] = useState('');
+  const [convertReceived, setConvertReceived] = useState('');
+  const [convertDueDate, setConvertDueDate] = useState('');
+  const [units, setUnits] = useState([]);
 
   const readOnly = isEditing && quotation && quotation.status !== 'sent';
 
   useEffect(() => {
-    CustomersAPI.list({ per_page: 200 }).then((r) => setCustomers(r.data.data || r.data)).catch(() => {});
+    CustomersAPI.listWithBalances().then((r) => setCustomers((r.data.data || []).filter((customer) => customer.is_active !== false))).catch(() => {});
     WarehousesAPI.list({ per_page: 100 }).then((r) => setWarehouses(r.data.data || r.data)).catch(() => {});
     CategoriesAPI.list({ per_page: 100 }).then((r) => setCategories(r.data.data || r.data)).catch(() => {});
+    UnitsAPI.list({ per_page: 200 }).then((r) => setUnits(r.data.data || r.data)).catch(() => {});
   }, []);
 
   const loadProducts = useCallback(() => {
@@ -88,6 +100,8 @@ export default function QuotationBuilder() {
           cost_price: String(item.product_cost ?? 0),
           discount_type: item.discount_type || 'none',
           discount_value: item.discount_value ? String(item.discount_value) : '',
+          unit_id: item.sale_unit_id || null,
+          unit_quantity: item.unit_quantity !== null && item.unit_quantity !== undefined ? String(item.unit_quantity) : null,
         })));
       })
       .catch((e) => setError(e.response?.data?.message || 'Could not load this quotation.'))
@@ -96,9 +110,18 @@ export default function QuotationBuilder() {
 
   const addItem = (product) => {
     if (readOnly) return;
+    const lineUnits = compatibleUnits(product, units);
+    const initialUnit = lineUnits.length ? findUnit(defaultUnitId(product), units) || lineUnits[0] : null;
     setItems((previous) => {
       const existing = previous.find((line) => line.product.id === product.id);
       if (existing) {
+        if (existing.unit_id) {
+          const unit = findUnit(existing.unit_id, units);
+          const nextUnitQuantity = numericValue(existing.unit_quantity) + 1;
+          return previous.map((line) => (line.product.id === product.id
+            ? { ...line, unit_quantity: String(nextUnitQuantity), quantity: String(convertUnits(nextUnitQuantity, unit, product.stockUnit)) }
+            : line));
+        }
         return previous.map((line) => (line.product.id === product.id
           ? { ...line, quantity: String(numericValue(line.quantity) + 1) }
           : line));
@@ -107,6 +130,8 @@ export default function QuotationBuilder() {
         line_id: `product-${product.id}-${Date.now()}`,
         product,
         quantity: '1',
+        unit_id: initialUnit ? initialUnit.id : null,
+        unit_quantity: initialUnit ? '1' : null,
         price: String(product.product_price ?? 0),
         standard_price: String(product.product_price ?? 0),
         cost_price: String(product.product_cost ?? 0),
@@ -118,6 +143,22 @@ export default function QuotationBuilder() {
 
   const updateLine = (lineId, patch) => setItems((prev) => prev.map((line) => (line.line_id === lineId ? { ...line, ...patch } : line)));
   const removeLine = (lineId) => setItems((prev) => prev.filter((line) => line.line_id !== lineId));
+
+  // Mirrors POS.jsx: keeps `quantity` in the product's stock unit while
+  // unit_id/unit_quantity remember what the cashier actually typed.
+  const updateLineUnit = (lineId, { unitQuantity, unitId }) => {
+    setItems((previous) => previous.map((line) => {
+      if (line.line_id !== lineId) return line;
+      const product = line.product;
+      const nextUnitId = unitId !== undefined ? unitId : line.unit_id;
+      const nextUnitQuantity = unitQuantity !== undefined ? unitQuantity : line.unit_quantity;
+      const unit = findUnit(nextUnitId, units);
+      const quantity = product?.stockUnit
+        ? convertUnits(numericValue(nextUnitQuantity), unit, product.stockUnit)
+        : numericValue(nextUnitQuantity);
+      return { ...line, unit_id: nextUnitId, unit_quantity: nextUnitQuantity, quantity: String(quantity) };
+    }));
+  };
 
   const lineBaseTotal = (line) => numericValue(line.quantity) * numericValue(line.price);
   const lineDiscountAmount = (line) => {
@@ -140,6 +181,9 @@ export default function QuotationBuilder() {
   const taxAmount = ((subTotal - orderDiscount) * numericValue(taxRate)) / 100;
   const grandTotal = Math.max(0, subTotal - orderDiscount + orderShipping + taxAmount);
   const netProfit = totalProfit - orderDiscount;
+  const selectedCustomer = customers.find((customer) => String(customer.id) === String(customerId));
+  const conversionDebt = Math.max(0, Number(quotation?.grand_total || grandTotal || 0) - Number(convertPaid || 0));
+  const projectedConversionBalance = Number(selectedCustomer?.total_due || 0) + conversionDebt;
 
   const validate = () => {
     if (!customerId) return 'Select a customer.';
@@ -176,6 +220,8 @@ export default function QuotationBuilder() {
         product_price: numericValue(line.price),
         discount_type: line.discount_type,
         discount_value: numericValue(line.discount_value),
+        sale_unit_id: line.unit_id || null,
+        unit_quantity: line.unit_id ? numericValue(line.unit_quantity) : null,
       })),
     };
 
@@ -192,17 +238,54 @@ export default function QuotationBuilder() {
     }
   };
 
-  const convertToSale = async () => {
-    const ok = await confirm('Convert this quotation into a real sale? Stock will be deducted and an invoice will be created.', {
-      title: 'Convert to sale', confirmLabel: 'Convert',
-    });
-    if (!ok) return;
+  const openConvert = () => {
+    const total = Number(quotation?.grand_total || grandTotal || 0).toFixed(2);
+    setConvertMethod('cash');
+    setConvertPaid(total);
+    setConvertReceived(total);
+    setConvertDueDate('');
+    setConvertError('');
+    setConvertOpen(true);
+  };
+
+  const convertToSale = async (event) => {
+    event.preventDefault();
+    const paid = Number(convertPaid || 0);
+    const received = Number(convertReceived || 0);
+    const total = Number(quotation?.grand_total || 0);
+    if (!Number.isFinite(paid) || paid < 0 || paid - total > 0.005) {
+      setConvertError(`Paid amount must be between 0 and ${total.toFixed(2)}.`);
+      return;
+    }
+    if (!Number.isFinite(received) || received < paid) {
+      setConvertError('Received amount must be at least the paid amount.');
+      return;
+    }
+    setConverting(true);
+    setConvertError('');
     try {
-      const response = await QuotationsHoldsAPI.convertQuotation(id, {});
+      const response = await QuotationsHoldsAPI.convertQuotation(id, {
+        payment_type: convertMethod,
+        paid_amount: paid,
+        received_amount: received,
+        due_date: paid < total ? (convertDueDate || null) : null,
+      });
+      setConvertOpen(false);
       await showAlert(`Sale ${response.data.data.reference_code} created from this quotation.`, { title: 'Converted' });
       navigate('/sales');
     } catch (e) {
-      showAlert(e.response?.data?.message || 'Could not convert this quotation.', { title: 'Conversion failed' });
+      setConvertError(e.response?.data?.message || 'Could not convert this quotation.');
+    } finally {
+      setConverting(false);
+    }
+  };
+
+  const reopenQuotation = async () => {
+    try {
+      const response = await QuotationsHoldsAPI.setQuotationStatus(id, 'sent');
+      setQuotation((current) => ({ ...current, ...response.data.data }));
+    } catch (e) {
+      showAlert(e.response?.data?.message || 'Could not reopen this quotation.', { title: 'Action failed' });
     }
   };
 
@@ -231,8 +314,11 @@ export default function QuotationBuilder() {
             {isEditing && quotation?.status === 'sent' && (
               <>
                 <Button type="button" variant="secondary" onClick={cancelQuotation}>Cancel quotation</Button>
-                <Button type="button" onClick={convertToSale}>Convert to Sale</Button>
+                <Button type="button" onClick={openConvert}>Convert to Sale</Button>
               </>
+            )}
+            {isEditing && quotation?.status === 'expired' && (
+              <Button type="button" onClick={reopenQuotation}>Reopen &amp; review</Button>
             )}
           </div>
         )}
@@ -352,11 +438,30 @@ export default function QuotationBuilder() {
                       {!readOnly && <button type="button" onClick={() => removeLine(line.line_id)} className="text-graphite-400 hover:text-red-600 text-xs">Remove</button>}
                     </div>
                     <div className="mt-2 grid grid-cols-[5rem_minmax(7rem,1fr)_auto] items-end gap-2">
-                      <label className="block">
-                        <span className="mb-1 block text-[11px] font-medium text-graphite-500">Qty</span>
-                        <input type="number" min="0.01" step="any" className={inputClass + ' w-full py-1'} value={line.quantity} disabled={readOnly}
-                          onChange={(e) => updateLine(line.line_id, { quantity: e.target.value })} />
-                      </label>
+                      {line.unit_id ? (
+                        <label className="col-span-1 block">
+                          <span className="mb-1 block text-[11px] font-medium text-graphite-500">Length</span>
+                          <div className="flex items-center gap-1">
+                            <input type="number" min="0.01" step="any" className={inputClass + ' w-full py-1'} value={line.unit_quantity ?? ''} disabled={readOnly}
+                              onChange={(e) => updateLineUnit(line.line_id, { unitQuantity: e.target.value })} />
+                            <select className={inputClass + ' w-auto py-1 text-xs'} value={line.unit_id} disabled={readOnly}
+                              onChange={(e) => updateLineUnit(line.line_id, { unitId: Number(e.target.value) })}>
+                              {compatibleUnits(line.product, units).map((unit) => (
+                                <option key={unit.id} value={unit.id}>{unit.short_name || unit.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <span className="mt-1 block text-[10px] text-graphite-400">
+                            = {Number(line.quantity || 0).toLocaleString('en-LK', { maximumFractionDigits: 3 })} {line.product?.stockUnit?.short_name || line.product?.stockUnit?.name}
+                          </span>
+                        </label>
+                      ) : (
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-medium text-graphite-500">Qty</span>
+                          <input type="number" min="0.01" step="any" className={inputClass + ' w-full py-1'} value={line.quantity} disabled={readOnly}
+                            onChange={(e) => updateLine(line.line_id, { quantity: e.target.value })} />
+                        </label>
+                      )}
                       <label className="block">
                         <span className="mb-1 flex items-center gap-1 text-[11px] font-medium text-graphite-500">
                           Quoted price
@@ -456,6 +561,52 @@ export default function QuotationBuilder() {
           )}
         </Card>
       </div>
+
+      <Modal open={convertOpen} onClose={() => !converting && setConvertOpen(false)} title="Convert quotation to sale" width="max-w-xl">
+        <form onSubmit={convertToSale} className="space-y-3">
+          {convertError && <div className="rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">{convertError}</div>}
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+            Invoice total: <strong>{formatMoney(quotation?.grand_total)}</strong>. Stock is deducted only after this form succeeds.
+          </div>
+          {selectedCustomer && conversionDebt > 0.005 && (
+            <div className={`rounded-md border px-3 py-2 text-xs ${Number(selectedCustomer.credit_limit || 0) > 0 && projectedConversionBalance > Number(selectedCustomer.credit_limit) ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+              Existing customer balance: <strong>{formatMoney(selectedCustomer.total_due)}</strong>. After conversion: <strong>{formatMoney(projectedConversionBalance)}</strong>.
+              {Number(selectedCustomer.credit_limit || 0) > 0 && projectedConversionBalance > Number(selectedCustomer.credit_limit) && ` This exceeds the credit limit of ${formatMoney(selectedCustomer.credit_limit)}.`}
+            </div>
+          )}
+          <Field label="Payment method">
+            <select className={inputClass} value={convertMethod} onChange={(e) => {
+              const method = e.target.value;
+              setConvertMethod(method);
+              if (method === 'credit') { setConvertPaid('0'); setConvertReceived('0'); }
+            }}>
+              <option value="cash">Cash</option>
+              <option value="card">Card</option>
+              <option value="bank_transfer">Bank transfer</option>
+              <option value="credit">Credit / pay later</option>
+            </select>
+          </Field>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Amount paid now" hint="Enter 0 for a fully credit sale.">
+              <input type="number" min="0" max={quotation?.grand_total} step="any" className={inputClass} value={convertPaid}
+                onChange={(e) => setConvertPaid(e.target.value)} autoFocus />
+            </Field>
+            <Field label="Amount received" hint="May be higher for cash tender; change is not counted as payment.">
+              <input type="number" min="0" step="any" className={inputClass} value={convertReceived}
+                onChange={(e) => setConvertReceived(e.target.value)} />
+            </Field>
+          </div>
+          {Number(convertPaid || 0) < Number(quotation?.grand_total || 0) && (
+            <Field label="Payment due date" hint="Leave blank to use this customer's default payment terms.">
+              <input type="date" className={inputClass} value={convertDueDate} onChange={(e) => setConvertDueDate(e.target.value)} />
+            </Field>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" disabled={converting} onClick={() => setConvertOpen(false)}>Cancel</Button>
+            <Button type="submit" disabled={converting}>{converting ? 'Converting…' : 'Create sale & deduct stock'}</Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

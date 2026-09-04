@@ -18,13 +18,9 @@ const {
 } = require('./services/databaseConfig.cjs');
 const { applyDatabaseConfig } = require('./services/applyDatabaseConfig.cjs');
 const {
-  testServerConnection,
+  testMongoConnection,
   provisionDatabase,
-} = require('./services/mysqlSetup.cjs');
-const {
-  detectXamppAndLocalMysql,
-  findXamppInstallations,
-} = require('./services/xamppDetector.cjs');
+} = require('./services/mongodbSetup.cjs');
 const { installFileLogger } = require('./services/logger.cjs');
 
 if (require('electron-squirrel-startup')) app.quit();
@@ -227,7 +223,7 @@ async function showStartupFailure(error) {
   const response = await dialog.showMessageBox({
     type: 'error',
     title: 'Database Connection Failed',
-    message: 'Shanthi Electricals POS could not connect to its MySQL database.',
+    message: 'Shanthi Electricals POS could not connect to MongoDB.',
     detail: error?.message || String(error),
     buttons: ['Configure Database', 'Close'],
     defaultId: 0,
@@ -342,8 +338,8 @@ function registerIpcHandlers() {
     const response = await dialog.showMessageBox(mainWindow || undefined, {
       type: 'warning',
       title: 'Change Database Connection',
-      message: 'Reconfigure the MySQL connection for this Windows user?',
-      detail: 'The POS will close and reopen the first-run database setup. Existing MySQL data is not deleted.',
+      message: 'Reconfigure the MongoDB connection for this Windows user?',
+      detail: 'The POS will close and reopen the first-run database setup. Existing MongoDB data is not deleted.',
       buttons: ['Cancel', 'Reconfigure'],
       defaultId: 0,
       cancelId: 0,
@@ -358,20 +354,9 @@ function registerIpcHandlers() {
     return { success: true };
   });
 
-  ipcMain.handle('database:detect-xampp', async () => detectXamppAndLocalMysql());
-
-  ipcMain.handle('database:open-xampp', async (_event, requestedPath) => {
-    const installations = findXamppInstallations();
-    const selected = installations.find((item) => item.controlPanel === requestedPath) || installations[0];
-    if (!selected) throw new Error('XAMPP was not found in a supported location.');
-    const error = await shell.openPath(selected.controlPanel);
-    if (error) throw new Error(error);
-    return { success: true };
-  });
-
   ipcMain.handle('database:test', async (_event, input) => {
     try {
-      return await testServerConnection(input || {});
+      return await testMongoConnection(input || {});
     } catch (error) {
       return { success: false, message: error.message, code: error.code || null };
     }
@@ -396,8 +381,6 @@ function registerIpcHandlers() {
         success: true,
         server: provisioned.server,
         database: provisioned.appConfig.database,
-        applicationUser: provisioned.appConfig.username,
-        dedicatedUserCreated: provisioned.dedicatedUserCreated,
       };
     } catch (error) {
       console.error('Database setup failed:', error);
