@@ -1,19 +1,13 @@
 const { todayISO } = require('../utils/date');
-const { Op } = require('../database/mongoOrm');
+const { Op } = require('../config/sequelizeCompat');
 const {
   Sale, SaleItem, Purchase, Product, ManageStock, Warehouse, ProductCategory,
 } = require('../models/associations');
 const HttpError = require('../utils/httpError');
 
-function groupedTotals(rows, fields) {
-  const grouped = new Map();
-  for (const row of rows) {
-    const current = grouped.get(row.date) || { date: row.date, count: 0 };
-    current.count += 1;
-    for (const field of fields) current[field] = Number(current[field] || 0) + Number(row[field] || 0);
-    grouped.set(row.date, current);
-  }
-  return [...grouped.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+function asNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
 }
 
 function dateRange(query = {}) {
@@ -27,14 +21,26 @@ async function salesReportData(query = {}) {
   const range = dateRange(query);
   const where = { date: range.condition };
   if (query.warehouse_id) where.warehouse_id = query.warehouse_id;
-  const rows = groupedTotals(await Sale.findAll({ where }), ['grand_total', 'paid_amount']);
-  const data = rows.map((row) => ({
-    date: row.date,
-    invoice_count: Number(row.count || 0),
-    total_sales: Number(row.grand_total || 0),
-    total_paid: Number(row.paid_amount || 0),
-    balance: Number(row.grand_total || 0) - Number(row.paid_amount || 0),
-  }));
+  const sales = await Sale.findAll({ where, attributes: ['date', 'grand_total', 'paid_amount'] });
+
+  const byDate = new Map();
+  for (const sale of sales) {
+    const bucket = byDate.get(sale.date) || { invoice_count: 0, total_sales: 0, total_paid: 0 };
+    bucket.invoice_count += 1;
+    bucket.total_sales += asNumber(sale.grand_total);
+    bucket.total_paid += asNumber(sale.paid_amount);
+    byDate.set(sale.date, bucket);
+  }
+  const data = [...byDate.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([date, bucket]) => ({
+      date,
+      invoice_count: bucket.invoice_count,
+      total_sales: bucket.total_sales,
+      total_paid: bucket.total_paid,
+      balance: bucket.total_sales - bucket.total_paid,
+    }));
+
   return {
     key: 'sales', title: 'Sales Report', range,
     columns: [
@@ -58,16 +64,29 @@ async function purchasesReportData(query = {}) {
   const range = dateRange(query);
   const where = { date: range.condition, status: { [Op.ne]: 'cancelled' } };
   if (query.warehouse_id) where.warehouse_id = query.warehouse_id;
-  const rows = groupedTotals(await Purchase.findAll({ where }), ['grand_total', 'returned_amount', 'paid_amount']);
-  const data = rows.map((row) => ({
-    date: row.date,
-    purchase_count: Number(row.count || 0),
-    total_purchases: Number(row.grand_total || 0),
-    total_returns: Number(row.returned_amount || 0),
-    net_purchases: Math.max(0, Number(row.grand_total || 0) - Number(row.returned_amount || 0)),
-    total_paid: Number(row.paid_amount || 0),
-    outstanding: Math.max(0, Number(row.grand_total || 0) - Number(row.returned_amount || 0) - Number(row.paid_amount || 0)),
-  }));
+  const purchases = await Purchase.findAll({ where, attributes: ['date', 'grand_total', 'returned_amount', 'paid_amount'] });
+
+  const byDate = new Map();
+  for (const purchase of purchases) {
+    const bucket = byDate.get(purchase.date) || { purchase_count: 0, total_purchases: 0, total_returns: 0, total_paid: 0 };
+    bucket.purchase_count += 1;
+    bucket.total_purchases += asNumber(purchase.grand_total);
+    bucket.total_returns += asNumber(purchase.returned_amount);
+    bucket.total_paid += asNumber(purchase.paid_amount);
+    byDate.set(purchase.date, bucket);
+  }
+  const data = [...byDate.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([date, bucket]) => ({
+      date,
+      purchase_count: bucket.purchase_count,
+      total_purchases: bucket.total_purchases,
+      total_returns: bucket.total_returns,
+      net_purchases: Math.max(0, bucket.total_purchases - bucket.total_returns),
+      total_paid: bucket.total_paid,
+      outstanding: Math.max(0, bucket.total_purchases - bucket.total_returns - bucket.total_paid),
+    }));
+
   return {
     key: 'purchases', title: 'Purchases Report', range,
     columns: [
@@ -96,20 +115,30 @@ async function productSalesReportData(query = {}) {
   const saleWhere = { date: range.condition };
   if (query.warehouse_id) saleWhere.warehouse_id = query.warehouse_id;
   const limit = Math.min(Math.max(parseInt(query.limit || '200', 10) || 200, 1), 1000);
-  const sales = await Sale.findAll({ where: saleWhere, attributes: ['id'] });
-  const saleIds = sales.map((sale) => sale.id);
-  const lineItems = saleIds.length
-    ? await SaleItem.findAll({ where: { sale_id: { [Op.in]: saleIds }, product_id: { [Op.ne]: null } } })
-    : [];
+
+  const salesInRange = await Sale.findAll({ where: saleWhere, attributes: ['id'] });
+  const saleIds = salesInRange.map((sale) => sale.id);
+
   const byProduct = new Map();
-  for (const item of lineItems) {
-    const current = byProduct.get(Number(item.product_id)) || { product_id: Number(item.product_id), total_quantity_sold: 0, total_revenue: 0 };
-    current.total_quantity_sold += Number(item.quantity || 0);
-    current.total_revenue += Number(item.sub_total || 0);
-    byProduct.set(current.product_id, current);
+  if (saleIds.length) {
+    // Manual one-off bill items are revenue, but are not catalogue products and
+    // should not distort the best-selling inventory report.
+    const items = await SaleItem.findAll({
+      where: { sale_id: { [Op.in]: saleIds }, product_id: { [Op.ne]: null } },
+      attributes: ['product_id', 'quantity', 'sub_total'],
+    });
+    for (const item of items) {
+      const bucket = byProduct.get(item.product_id) || { total_quantity_sold: 0, total_revenue: 0 };
+      bucket.total_quantity_sold += asNumber(item.quantity);
+      bucket.total_revenue += asNumber(item.sub_total);
+      byProduct.set(item.product_id, bucket);
+    }
   }
-  const aggregates = [...byProduct.values()].sort((a, b) => b.total_revenue - a.total_revenue).slice(0, limit);
-  const productIds = aggregates.map((row) => Number(row.product_id)).filter(Boolean);
+
+  const aggregates = [...byProduct.entries()]
+    .sort(([, a], [, b]) => b.total_revenue - a.total_revenue)
+    .slice(0, limit);
+  const productIds = aggregates.map(([productId]) => productId);
   const products = productIds.length
     ? await Product.findAll({
       where: { id: productIds },
@@ -118,18 +147,19 @@ async function productSalesReportData(query = {}) {
     })
     : [];
   const productMap = new Map(products.map((product) => [Number(product.id), product.toJSON()]));
-  const data = aggregates.map((row) => {
-    const product = productMap.get(Number(row.product_id));
+  const data = aggregates.map(([productId, bucket]) => {
+    const product = productMap.get(Number(productId));
     return {
-      product_id: Number(row.product_id),
-      product: product?.name || `Product #${row.product_id}`,
+      product_id: Number(productId),
+      product: product?.name || `Product #${productId}`,
       code: product?.code || '',
       category: product?.ProductCategory?.name || '',
-      total_quantity_sold: Number(row.total_quantity_sold || 0),
-      total_revenue: Number(row.total_revenue || 0),
+      total_quantity_sold: bucket.total_quantity_sold,
+      total_revenue: bucket.total_revenue,
       Product: product || null,
     };
   });
+
   return {
     key: 'product-sales', title: 'Best-Selling Products Report', range,
     columns: [

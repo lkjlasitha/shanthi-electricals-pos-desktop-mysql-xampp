@@ -1,14 +1,12 @@
 require('dotenv').config();
-const sequelize = require('../config/db');
-const { ensureDatabaseExists, formatDatabaseError } = require('../config/databaseSetup');
+const { connect, disconnect } = require('../config/db');
+const { formatDatabaseError } = require('../config/databaseSetup');
 require('../models/associations');
 const { migrateSchema } = require('../config/schemaMigrator');
 const { bootstrapShopData } = require('../services/bootstrapService');
 
 async function run() {
-  await ensureDatabaseExists();
-  await sequelize.authenticate();
-  await sequelize.sync({ alter: false });
+  await connect();
   await migrateSchema({ verbose: true });
 
   const result = await bootstrapShopData({
@@ -31,13 +29,13 @@ async function run() {
 
 run()
   .then(async () => {
-    await sequelize.close();
+    await disconnect();
     process.exit(0);
   })
   .catch(async (error) => {
     console.error(`Seed failed: ${formatDatabaseError(error)}`);
     try {
-      await sequelize.close();
+      await disconnect();
     } catch {
       // Ignore close errors after a failed connection.
     }

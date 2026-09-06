@@ -1,11 +1,10 @@
-const { DataTypes } = require('../database/mongoOrm');
-const sequelize = require('../config/db');
+const { defineModel, DataTypes } = require('../config/sequelizeCompat');
 
 /* ============================================================
    AUTH / RBAC
    ============================================================ */
 
-const Role = sequelize.define('Role', {
+const Role = defineModel('Role', {
   name: { type: DataTypes.STRING, allowNull: false, unique: true },
   display_name: { type: DataTypes.STRING, allowNull: false },
   // Simplified RBAC: permissions stored as a JSON array of permission keys,
@@ -13,7 +12,7 @@ const Role = sequelize.define('Role', {
   permissions: { type: DataTypes.JSON, allowNull: false, defaultValue: [] },
 }, { tableName: 'roles' });
 
-const User = sequelize.define('User', {
+const User = defineModel('User', {
   name: { type: DataTypes.STRING, allowNull: false },
   email: { type: DataTypes.STRING, allowNull: false, unique: true, validate: { isEmail: true } },
   password: { type: DataTypes.STRING, allowNull: false },
@@ -28,7 +27,7 @@ const User = sequelize.define('User', {
    MASTER DATA
    ============================================================ */
 
-const Warehouse = sequelize.define('Warehouse', {
+const Warehouse = defineModel('Warehouse', {
   name: { type: DataTypes.STRING, allowNull: false },
   phone: { type: DataTypes.STRING, allowNull: true },
   country: { type: DataTypes.STRING, defaultValue: 'Sri Lanka' },
@@ -39,24 +38,24 @@ const Warehouse = sequelize.define('Warehouse', {
   is_default: { type: DataTypes.BOOLEAN, defaultValue: false },
 }, { tableName: 'warehouses' });
 
-const ProductCategory = sequelize.define('ProductCategory', {
+const ProductCategory = defineModel('ProductCategory', {
   name: { type: DataTypes.STRING, allowNull: false },
   code: { type: DataTypes.STRING, allowNull: true, unique: true },
   slug: { type: DataTypes.STRING, allowNull: true },
 }, { tableName: 'product_categories' });
 
-const Brand = sequelize.define('Brand', {
+const Brand = defineModel('Brand', {
   name: { type: DataTypes.STRING, allowNull: false },
   slug: { type: DataTypes.STRING, allowNull: true },
   image: { type: DataTypes.STRING, allowNull: true },
 }, { tableName: 'brands' });
 
-const BaseUnit = sequelize.define('BaseUnit', {
+const BaseUnit = defineModel('BaseUnit', {
   name: { type: DataTypes.STRING, allowNull: false }, // e.g. Piece, Meter, Kilogram, Box, Roll
   is_default: { type: DataTypes.BOOLEAN, defaultValue: false },
 }, { tableName: 'base_units' });
 
-const Unit = sequelize.define('Unit', {
+const Unit = defineModel('Unit', {
   name: { type: DataTypes.STRING, allowNull: false }, // e.g. Box of 10
   short_name: { type: DataTypes.STRING, allowNull: true }, // e.g. box10
   base_unit_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -64,7 +63,7 @@ const Unit = sequelize.define('Unit', {
   operation_value: { type: DataTypes.DOUBLE, defaultValue: 1 }, // conversion factor vs base unit
 }, { tableName: 'units' });
 
-const Currency = sequelize.define('Currency', {
+const Currency = defineModel('Currency', {
   name: { type: DataTypes.STRING, allowNull: false }, // Sri Lankan Rupee
   code: { type: DataTypes.STRING, allowNull: false, unique: true }, // LKR
   symbol: { type: DataTypes.STRING, allowNull: false }, // Rs.
@@ -73,7 +72,7 @@ const Currency = sequelize.define('Currency', {
   position: { type: DataTypes.ENUM('left', 'right'), defaultValue: 'left' },
 }, { tableName: 'currencies' });
 
-const Customer = sequelize.define('Customer', {
+const Customer = defineModel('Customer', {
   name: { type: DataTypes.STRING, allowNull: false },
   email: { type: DataTypes.STRING, allowNull: true },
   phone: { type: DataTypes.STRING, allowNull: false }, // Sri Lankan mobile/landline
@@ -95,7 +94,7 @@ const Customer = sequelize.define('Customer', {
   notes: { type: DataTypes.TEXT, allowNull: true }, // free-form notes shown on the customer profile
 }, { tableName: 'customers' });
 
-const Supplier = sequelize.define('Supplier', {
+const Supplier = defineModel('Supplier', {
   name: { type: DataTypes.STRING, allowNull: false },
   email: { type: DataTypes.STRING, allowNull: true },
   phone: { type: DataTypes.STRING, allowNull: false },
@@ -108,15 +107,15 @@ const Supplier = sequelize.define('Supplier', {
   payment_terms_days: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
 }, { tableName: 'suppliers' });
 
-// Single-row key/value business settings table.
-// The value can also store the base64 business logo data URI.
-const Setting = sequelize.define('Setting', {
+// Single-row key/value business settings table. MongoDB has no per-field size
+// limit like MySQL's old 64KB TEXT cap, so the base64 business logo data URI
+// stores here without any special column-widening step.
+const Setting = defineModel('Setting', {
   key: { type: DataTypes.STRING, allowNull: false, unique: true },
   value: { type: DataTypes.TEXT('long'), allowNull: true },
 }, { tableName: 'settings' });
 
 module.exports = {
-  sequelize,
   Role,
   User,
   Warehouse,

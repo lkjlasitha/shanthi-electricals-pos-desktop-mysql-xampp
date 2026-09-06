@@ -1,4 +1,4 @@
-const { Op } = require('../database/mongoOrm');
+const { Op } = require('../config/sequelizeCompat');
 const {
   Quotation, QuotationItem, Hold, HoldItem, Customer, Warehouse, Product, Unit,
   Sale, SaleItem, SalesPayment, POSRegister, sequelize,

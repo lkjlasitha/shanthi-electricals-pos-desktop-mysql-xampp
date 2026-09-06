@@ -1,4 +1,4 @@
-const { Op } = require('../database/mongoOrm');
+const { Op } = require('../config/sequelizeCompat');
 const { todayISO } = require('../utils/date');
 const {
   Sale, SaleItem, Product, Customer, Warehouse, SalesPayment, POSRegister, sequelize,

@@ -1,6 +1,6 @@
 require('dotenv').config();
-const sequelize = require('./config/db');
-const { ensureDatabaseExists, formatDatabaseError } = require('./config/databaseSetup');
+const { connect } = require('./config/db');
+const { formatDatabaseError } = require('./config/databaseSetup');
 require('./models/associations');
 const { migrateSchema } = require('./config/schemaMigrator');
 const { ensureDefaultSettings } = require('./services/settingsService');
@@ -10,10 +10,8 @@ const PORT = Number(process.env.PORT || 4000);
 
 async function start() {
   try {
-    await ensureDatabaseExists();
-    await sequelize.authenticate();
+    await connect();
     console.log('Database connected');
-    await sequelize.sync({ alter: false });
     await migrateSchema({ verbose: true });
     await ensureDefaultSettings();
 

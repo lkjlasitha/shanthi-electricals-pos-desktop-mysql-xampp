@@ -3,7 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none';" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none';"
+    />
     <title>Shanthi Electricals POS Setup</title>
     <link rel="stylesheet" href="./setup.css" />
   </head>
@@ -14,19 +17,59 @@
         <div>
           <p class="eyebrow">FIRST-RUN DATABASE SETUP</p>
           <h1>Shanthi Electricals POS</h1>
-          <p class="subtitle">Connect this desktop application to MongoDB Atlas or a transaction-capable MongoDB replica set.</p>
+          <p class="subtitle">
+            Connect this desktop application to XAMPP MariaDB or another MySQL/MariaDB server.
+          </p>
         </div>
       </header>
+
       <div id="startup-message" class="notice hidden"></div>
+
       <section class="panel">
-        <h2>1. MongoDB connection</h2>
-        <p class="section-help">Use an Atlas URI for the simplest setup. A local MongoDB installation must be configured as a replica set because sales and stock updates are transactional.</p>
+        <h2>1. Choose the database server</h2>
+        <div class="mode-grid">
+          <label class="mode-card selected" data-mode-card="xampp">
+            <input type="radio" name="mode" value="xampp" checked />
+            <span class="mode-title">Use XAMPP</span>
+            <span class="mode-copy">Detect local XAMPP and connect to its MariaDB service.</span>
+          </label>
+          <label class="mode-card" data-mode-card="mysql">
+            <input type="radio" name="mode" value="mysql" />
+            <span class="mode-title">Use MySQL Server</span>
+            <span class="mode-copy">Connect to standalone MySQL, MariaDB, or a server on another computer.</span>
+          </label>
+        </div>
+
+        <div id="xampp-status" class="status-box neutral">
+          <span class="status-dot"></span>
+          <div>
+            <strong>Checking for XAMPP...</strong>
+            <p id="xampp-status-detail">Looking in common Windows installation folders.</p>
+          </div>
+          <button id="open-xampp" type="button" class="button secondary hidden">Open XAMPP</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>2. MySQL connection</h2>
         <div class="form-grid two">
-          <label class="wide">
-            <span>MongoDB connection URI</span>
+          <label>
+            <span>Host or IP address</span>
+            <input id="host" value="127.0.0.1" autocomplete="off" />
+          </label>
+          <label>
+            <span>Port</span>
+            <input id="port" type="number" min="1" max="65535" value="3306" />
+          </label>
+          <label>
+            <span>Administrator username</span>
+            <input id="db-username" value="root" autocomplete="username" />
+          </label>
+          <label>
+            <span>Administrator password</span>
             <div class="password-row">
-              <input id="mongodb-uri" type="password" value="mongodb://127.0.0.1:27017/?replicaSet=rs0" autocomplete="off" />
-              <button type="button" class="text-button" data-toggle-password="mongodb-uri">Show</button>
+              <input id="db-password" type="password" autocomplete="current-password" />
+              <button type="button" class="text-button" data-toggle-password="db-password">Show</button>
             </div>
           </label>
           <label class="wide">
@@ -34,32 +77,84 @@
             <input id="database" value="electro_pos" autocomplete="off" />
           </label>
         </div>
-        <div class="notice">The URI is encrypted with the operating system credential store before it is saved.</div>
+
+        <div class="choice-row">
+          <label class="check-label">
+            <input id="create-database" type="checkbox" checked />
+            <span>Create the database when it does not exist</span>
+          </label>
+        </div>
+
+        <fieldset>
+          <legend>Credentials saved by the POS</legend>
+          <label class="radio-line">
+            <input type="radio" name="credential-mode" value="dedicated" checked />
+            <span>
+              <strong>Create a dedicated POS database user</strong>
+              <small>Recommended. Administrator credentials are used once and are not saved.</small>
+            </span>
+          </label>
+          <label class="radio-line">
+            <input type="radio" name="credential-mode" value="provided" />
+            <span>
+              <strong>Use the supplied MySQL account</strong>
+              <small>Use this when a database administrator already created the exact POS account.</small>
+            </span>
+          </label>
+        </fieldset>
+
         <div class="action-row">
           <button id="test-connection" type="button" class="button secondary">Test connection</button>
           <div id="connection-result" class="inline-result"></div>
         </div>
       </section>
+
       <section class="panel">
-        <h2>2. Create the first POS administrator</h2>
-        <p class="section-help">These are POS login details, not MongoDB credentials. The account is created only when the database has no POS users.</p>
+        <h2>3. Create the first POS administrator</h2>
+        <p class="section-help">
+          These are POS login details, not MySQL credentials. The account is created only when the database has no POS users.
+        </p>
         <div class="form-grid two">
-          <label><span>Full name</span><input id="admin-name" value="Shop Owner" autocomplete="name" /></label>
-          <label><span>Email address</span><input id="admin-email" type="email" value="admin@shanthi.local" autocomplete="email" /></label>
+          <label>
+            <span>Full name</span>
+            <input id="admin-name" value="Shop Owner" autocomplete="name" />
+          </label>
+          <label>
+            <span>Email address</span>
+            <input id="admin-email" type="email" value="admin@shanthi.local" autocomplete="email" />
+          </label>
           <label>
             <span>POS password</span>
-            <div class="password-row"><input id="admin-password" type="password" minlength="8" autocomplete="new-password" /><button type="button" class="text-button" data-toggle-password="admin-password">Show</button></div>
+            <div class="password-row">
+              <input id="admin-password" type="password" minlength="8" autocomplete="new-password" />
+              <button type="button" class="text-button" data-toggle-password="admin-password">Show</button>
+            </div>
           </label>
-          <label><span>Confirm POS password</span><input id="admin-confirm-password" type="password" minlength="8" autocomplete="new-password" /></label>
-          <label class="wide"><span>Phone number (optional)</span><input id="admin-phone" value="+94 " autocomplete="tel" /></label>
+          <label>
+            <span>Confirm POS password</span>
+            <input id="admin-confirm-password" type="password" minlength="8" autocomplete="new-password" />
+          </label>
+          <label class="wide">
+            <span>Phone number (optional)</span>
+            <input id="admin-phone" value="+94 " autocomplete="tel" />
+          </label>
         </div>
       </section>
+
       <section class="finish-panel">
-        <div><strong>Ready to initialize</strong><p>The app will validate transaction support, create collections and indexes, and open the POS.</p></div>
+        <div>
+          <strong>Ready to initialize</strong>
+          <p>The app will create or validate the database, run safe schema migrations, and open the POS.</p>
+        </div>
         <button id="complete-setup" type="button" class="button primary">Create and open POS</button>
       </section>
+
       <div id="progress-overlay" class="overlay hidden" aria-live="polite">
-        <div class="progress-card"><div class="spinner"></div><h3>Preparing Shanthi Electricals POS</h3><p id="progress-message">Connecting to MongoDB...</p></div>
+        <div class="progress-card">
+          <div class="spinner"></div>
+          <h3>Preparing Shanthi Electricals POS</h3>
+          <p id="progress-message">Connecting to MySQL...</p>
+        </div>
       </div>
     </main>
     <script src="./setup.js"></script>

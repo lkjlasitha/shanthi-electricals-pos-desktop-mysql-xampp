@@ -1,4 +1,4 @@
-const { Op } = require('../database/mongoOrm');
+const { Op } = require('../config/sequelizeCompat');
 const {
   Purchase,
   PurchaseItem,

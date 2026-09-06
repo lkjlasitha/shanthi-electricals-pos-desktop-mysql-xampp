@@ -1,12 +1,10 @@
-const { DataTypes } = require('../database/mongoOrm');
-const sequelize = require('../config/db');
+const { defineModel, DataTypes } = require('../config/sequelizeCompat');
 
-// IMPORTANT: this must be a factory, not a shared object literal. Sequelize
-// mutates each attribute definition object in place when a model is defined
-// (attaching column/field metadata to it). Reusing the same object for many
-// fields caused every field defined with it to silently alias onto whichever
-// field was processed last (e.g. Sale.discount/shipping/tax_amount/grand_total
-// all collapsed onto a single database column). Always call money() fresh.
+// A factory (not a shared object literal) -- see the historical note this
+// codebase already learned the hard way with Sequelize: reusing one object
+// as multiple field definitions caused silent data corruption. The Mongo
+// adapter does not mutate field descriptors, but the factory pattern is kept
+// so this file matches its original, well-understood shape.
 function money() {
   return { type: DataTypes.DOUBLE, allowNull: true, defaultValue: 0 };
 }
@@ -14,7 +12,7 @@ function money() {
 /* ============================================================
    PURCHASES
    ============================================================ */
-const Purchase = sequelize.define('Purchase', {
+const Purchase = defineModel('Purchase', {
   date: { type: DataTypes.DATEONLY, allowNull: false },
   supplier_invoice_number: { type: DataTypes.STRING(100), allowNull: true },
   supplier_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -39,7 +37,7 @@ const Purchase = sequelize.define('Purchase', {
   created_by: { type: DataTypes.INTEGER, allowNull: true },
 }, { tableName: 'purchases' });
 
-const PurchaseItem = sequelize.define('PurchaseItem', {
+const PurchaseItem = defineModel('PurchaseItem', {
   purchase_id: { type: DataTypes.INTEGER, allowNull: false },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   product_cost: money(),
@@ -58,7 +56,7 @@ const PurchaseItem = sequelize.define('PurchaseItem', {
   sub_total: money(),
 }, { tableName: 'purchase_items' });
 
-const PurchasePayment = sequelize.define('PurchasePayment', {
+const PurchasePayment = defineModel('PurchasePayment', {
   purchase_id: { type: DataTypes.INTEGER, allowNull: false },
   amount: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
   paying_method: { type: DataTypes.STRING(50), allowNull: false, defaultValue: 'cash' },
@@ -74,7 +72,7 @@ const PurchasePayment = sequelize.define('PurchasePayment', {
   ],
 });
 
-const PurchaseReturn = sequelize.define('PurchaseReturn', {
+const PurchaseReturn = defineModel('PurchaseReturn', {
   purchase_id: { type: DataTypes.INTEGER, allowNull: false },
   date: { type: DataTypes.DATEONLY, allowNull: false },
   supplier_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -84,7 +82,7 @@ const PurchaseReturn = sequelize.define('PurchaseReturn', {
   reference_code: { type: DataTypes.STRING, allowNull: true },
 }, { tableName: 'purchase_returns' });
 
-const PurchaseReturnItem = sequelize.define('PurchaseReturnItem', {
+const PurchaseReturnItem = defineModel('PurchaseReturnItem', {
   purchase_return_id: { type: DataTypes.INTEGER, allowNull: false },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   quantity: { type: DataTypes.DOUBLE, allowNull: false },
@@ -95,7 +93,7 @@ const PurchaseReturnItem = sequelize.define('PurchaseReturnItem', {
 /* ============================================================
    SALES (POS)
    ============================================================ */
-const Sale = sequelize.define('Sale', {
+const Sale = defineModel('Sale', {
   date: { type: DataTypes.DATEONLY, allowNull: false },
   customer_id: { type: DataTypes.INTEGER, allowNull: false },
   warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -115,7 +113,7 @@ const Sale = sequelize.define('Sale', {
   created_by: { type: DataTypes.INTEGER, allowNull: true },
 }, { tableName: 'sales' });
 
-const SaleItem = sequelize.define('SaleItem', {
+const SaleItem = defineModel('SaleItem', {
   sale_id: { type: DataTypes.INTEGER, allowNull: false },
   // Null product_id means this was a one-off/manual bill item and should not affect stock.
   product_id: { type: DataTypes.INTEGER, allowNull: true },
@@ -146,7 +144,7 @@ const SaleItem = sequelize.define('SaleItem', {
   sub_total: money(),
 }, { tableName: 'sale_items' });
 
-const SalesPayment = sequelize.define('SalesPayment', {
+const SalesPayment = defineModel('SalesPayment', {
   sale_id: { type: DataTypes.INTEGER, allowNull: false },
   pos_register_id: { type: DataTypes.INTEGER, allowNull: true },
   // Set when this line was created by one customer-level payment that was
@@ -160,7 +158,7 @@ const SalesPayment = sequelize.define('SalesPayment', {
   paid_on: { type: DataTypes.DATEONLY, allowNull: false },
 }, { tableName: 'sales_payments' });
 
-const SaleReturn = sequelize.define('SaleReturn', {
+const SaleReturn = defineModel('SaleReturn', {
   sale_id: { type: DataTypes.INTEGER, allowNull: false },
   date: { type: DataTypes.DATEONLY, allowNull: false },
   customer_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -170,7 +168,7 @@ const SaleReturn = sequelize.define('SaleReturn', {
   reference_code: { type: DataTypes.STRING, allowNull: true },
 }, { tableName: 'sale_returns' });
 
-const SaleReturnItem = sequelize.define('SaleReturnItem', {
+const SaleReturnItem = defineModel('SaleReturnItem', {
   sale_return_id: { type: DataTypes.INTEGER, allowNull: false },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   quantity: { type: DataTypes.DOUBLE, allowNull: false },
@@ -182,7 +180,7 @@ const SaleReturnItem = sequelize.define('SaleReturnItem', {
 /* ============================================================
    STOCK MOVEMENTS: TRANSFERS & ADJUSTMENTS
    ============================================================ */
-const Transfer = sequelize.define('Transfer', {
+const Transfer = defineModel('Transfer', {
   date: { type: DataTypes.DATEONLY, allowNull: false },
   from_warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
   to_warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -194,7 +192,7 @@ const Transfer = sequelize.define('Transfer', {
   created_by: { type: DataTypes.INTEGER, allowNull: true },
 }, { tableName: 'transfers' });
 
-const TransferItem = sequelize.define('TransferItem', {
+const TransferItem = defineModel('TransferItem', {
   transfer_id: { type: DataTypes.INTEGER, allowNull: false },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   quantity: { type: DataTypes.DOUBLE, allowNull: false },
@@ -202,7 +200,7 @@ const TransferItem = sequelize.define('TransferItem', {
   sub_total: money(),
 }, { tableName: 'transfer_items' });
 
-const Adjustment = sequelize.define('Adjustment', {
+const Adjustment = defineModel('Adjustment', {
   date: { type: DataTypes.DATEONLY, allowNull: false },
   warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
   notes: { type: DataTypes.TEXT, allowNull: true },
@@ -210,7 +208,7 @@ const Adjustment = sequelize.define('Adjustment', {
   created_by: { type: DataTypes.INTEGER, allowNull: true },
 }, { tableName: 'adjustments' });
 
-const AdjustmentItem = sequelize.define('AdjustmentItem', {
+const AdjustmentItem = defineModel('AdjustmentItem', {
   adjustment_id: { type: DataTypes.INTEGER, allowNull: false },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   type: { type: DataTypes.ENUM('addition', 'subtraction'), allowNull: false },
@@ -220,7 +218,7 @@ const AdjustmentItem = sequelize.define('AdjustmentItem', {
 /* ============================================================
    QUOTATIONS & HOLDS
    ============================================================ */
-const Quotation = sequelize.define('Quotation', {
+const Quotation = defineModel('Quotation', {
   date: { type: DataTypes.DATEONLY, allowNull: false },
   customer_id: { type: DataTypes.INTEGER, allowNull: false },
   warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -239,7 +237,7 @@ const Quotation = sequelize.define('Quotation', {
   created_by: { type: DataTypes.INTEGER, allowNull: true },
 }, { tableName: 'quotations' });
 
-const QuotationItem = sequelize.define('QuotationItem', {
+const QuotationItem = defineModel('QuotationItem', {
   quotation_id: { type: DataTypes.INTEGER, allowNull: false },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   item_name: { type: DataTypes.STRING, allowNull: true },
@@ -271,7 +269,7 @@ const QuotationItem = sequelize.define('QuotationItem', {
    Header for one payment made against a customer's running account. The
    opening-balance portion is kept here; invoice portions create linked
    SalesPayment rows so every bill stays individually auditable. */
-const CustomerPayment = sequelize.define('CustomerPayment', {
+const CustomerPayment = defineModel('CustomerPayment', {
   customer_id: { type: DataTypes.INTEGER, allowNull: false },
   pos_register_id: { type: DataTypes.INTEGER, allowNull: true },
   amount: money(),
@@ -286,7 +284,7 @@ const CustomerPayment = sequelize.define('CustomerPayment', {
   created_by: { type: DataTypes.INTEGER, allowNull: true },
 }, { tableName: 'customer_payments' });
 
-const Hold = sequelize.define('Hold', {
+const Hold = defineModel('Hold', {
   warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
   customer_id: { type: DataTypes.INTEGER, allowNull: true },
   note: { type: DataTypes.TEXT, allowNull: true },
@@ -294,7 +292,7 @@ const Hold = sequelize.define('Hold', {
   created_by: { type: DataTypes.INTEGER, allowNull: true },
 }, { tableName: 'holds' });
 
-const HoldItem = sequelize.define('HoldItem', {
+const HoldItem = defineModel('HoldItem', {
   hold_id: { type: DataTypes.INTEGER, allowNull: false },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   quantity: { type: DataTypes.DOUBLE, allowNull: false },
@@ -304,7 +302,7 @@ const HoldItem = sequelize.define('HoldItem', {
 /* ============================================================
    POS REGISTER (cash drawer per shift)
    ============================================================ */
-const POSRegister = sequelize.define('POSRegister', {
+const POSRegister = defineModel('POSRegister', {
   user_id: { type: DataTypes.INTEGER, allowNull: false },
   warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
   opening_balance: money(),
@@ -319,12 +317,12 @@ const POSRegister = sequelize.define('POSRegister', {
 /* ============================================================
    EXPENSES
    ============================================================ */
-const ExpenseCategory = sequelize.define('ExpenseCategory', {
+const ExpenseCategory = defineModel('ExpenseCategory', {
   name: { type: DataTypes.STRING, allowNull: false },
   description: { type: DataTypes.TEXT, allowNull: true },
 }, { tableName: 'expense_categories' });
 
-const Expense = sequelize.define('Expense', {
+const Expense = defineModel('Expense', {
   expense_category_id: { type: DataTypes.INTEGER, allowNull: false },
   warehouse_id: { type: DataTypes.INTEGER, allowNull: true },
   title: { type: DataTypes.STRING, allowNull: false }, // e.g. "Electricity bill", "Shop rent"
@@ -336,7 +334,7 @@ const Expense = sequelize.define('Expense', {
 /* ============================================================
    COUPONS
    ============================================================ */
-const CouponCode = sequelize.define('CouponCode', {
+const CouponCode = defineModel('CouponCode', {
   code: { type: DataTypes.STRING, allowNull: false, unique: true },
   type: { type: DataTypes.ENUM('percentage', 'fixed'), defaultValue: 'percentage' },
   value: { type: DataTypes.DOUBLE, allowNull: false },

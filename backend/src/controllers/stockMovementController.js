@@ -1,4 +1,4 @@
-const { Op } = require('../database/mongoOrm');
+const { Op } = require('../config/sequelizeCompat');
 const {
   Transfer, TransferItem, Adjustment, AdjustmentItem, Warehouse, Product, User, sequelize,
 } = require('../models/associations');

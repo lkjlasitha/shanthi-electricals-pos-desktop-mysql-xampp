@@ -1,4 +1,4 @@
-const { Op } = require('../database/mongoOrm');
+const { Op } = require('../config/sequelizeCompat');
 const {
   Product, ProductCategory, Brand, Unit, ManageStock, Warehouse,
   MainProduct, VariationProduct, Variation, VariationType, ProductPriceHistory, User, Purchase,

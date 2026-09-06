@@ -1,4 +1,4 @@
-const { Op } = require('../database/mongoOrm');
+const { Op, getRawCollection } = require('../config/sequelizeCompat');
 const {
   SaleReturn, SaleReturnItem, Sale, SaleItem, Customer, Warehouse,
   PurchaseReturn, PurchaseReturnItem, Purchase, PurchaseItem, Supplier,
@@ -30,19 +30,31 @@ function aggregateSourceItems(items, valueField) {
   return rows;
 }
 
+// Sums already-returned quantities per product for a given sale/purchase,
+// so a second partial return can't exceed what's left returnable. Written
+// directly against the Mongo collections (rather than through the model
+// shim) since it's a simple two-step aggregate: find the return headers for
+// this source document, then sum their line items by product.
 async function returnedQuantities(kind, sourceId, transaction) {
   const saleMode = kind === 'sale';
-  const ReturnModel = saleMode ? SaleReturn : PurchaseReturn;
-  const ItemModel = saleMode ? SaleReturnItem : PurchaseReturnItem;
+  const returnTable = saleMode ? 'sale_returns' : 'purchase_returns';
+  const itemTable = saleMode ? 'sale_return_items' : 'purchase_return_items';
   const returnForeignKey = saleMode ? 'sale_return_id' : 'purchase_return_id';
   const sourceForeignKey = saleMode ? 'sale_id' : 'purchase_id';
-  const returns = await ReturnModel.findAll({ where: { [sourceForeignKey]: sourceId }, transaction });
-  const returnIds = returns.map((row) => row.id);
+  const session = transaction?.session;
+
+  const returnsCollection = await getRawCollection(returnTable);
+  const returnIds = (await returnsCollection.find({ [sourceForeignKey]: sourceId }, { session, projection: { id: 1 } }).toArray())
+    .map((row) => row.id);
   if (!returnIds.length) return new Map();
-  const items = await ItemModel.findAll({ where: { [returnForeignKey]: { [Op.in]: returnIds } }, transaction });
-  const totals = new Map();
-  for (const item of items) totals.set(Number(item.product_id), (totals.get(Number(item.product_id)) || 0) + Number(item.quantity || 0));
-  return totals;
+
+  const itemsCollection = await getRawCollection(itemTable);
+  const rows = await itemsCollection.aggregate([
+    { $match: { [returnForeignKey]: { $in: returnIds } } },
+    { $group: { _id: '$product_id', returned_quantity: { $sum: '$quantity' } } },
+  ], { session }).toArray();
+
+  return new Map(rows.map((row) => [Number(row._id), Number(row.returned_quantity || 0)]));
 }
 
 async function buildSaleReturnable(saleId, transaction) {

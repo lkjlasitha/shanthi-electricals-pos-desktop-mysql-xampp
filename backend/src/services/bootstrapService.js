@@ -126,44 +126,36 @@ async function ensureUnits() {
   const [boxBase] = await BaseUnit.findOrCreate({ where: { name: 'Box' } });
   const [rollBase] = await BaseUnit.findOrCreate({ where: { name: 'Roll' } });
 
-  await Promise.all([
-    Unit.findOrCreate({
-      where: { name: 'Piece', base_unit_id: pieceBase.id },
-      defaults: { short_name: 'pc', operator: '*', operation_value: 1 },
-    }),
-    Unit.findOrCreate({
-      where: { name: 'Meter', base_unit_id: meterBase.id },
-      defaults: { short_name: 'm', operator: '*', operation_value: 1 },
-    }),
-    Unit.findOrCreate({
-      where: { name: 'Box', base_unit_id: boxBase.id },
-      defaults: { short_name: 'box', operator: '*', operation_value: 1 },
-    }),
-    Unit.findOrCreate({
-      where: { name: 'Roll', base_unit_id: rollBase.id },
-      defaults: { short_name: 'roll', operator: '*', operation_value: 1 },
-    }),
-  ]);
+  // Sequential on purpose: this runs at most once per fresh install, so the
+  // negligible time cost isn't worth any complexity around concurrent writes.
+  const unitDefinitions = [
+    { name: 'Piece', base: pieceBase, short_name: 'pc' },
+    { name: 'Meter', base: meterBase, short_name: 'm' },
+    { name: 'Box', base: boxBase, short_name: 'box' },
+    { name: 'Roll', base: rollBase, short_name: 'roll' },
+  ];
+  for (const unit of unitDefinitions) {
+    await Unit.findOrCreate({
+      where: { name: unit.name, base_unit_id: unit.base.id },
+      defaults: { short_name: unit.short_name, operator: '*', operation_value: 1 },
+    });
+  }
 }
 
 async function ensureCatalogDefaults() {
-  await Promise.all([
-    ProductCategory.findOrCreate({ where: { name: 'Wires & Cables' } }),
-    ProductCategory.findOrCreate({ where: { name: 'Switches & Sockets' } }),
-    ProductCategory.findOrCreate({ where: { name: 'Lighting (Bulbs/LED)' } }),
-    ProductCategory.findOrCreate({ where: { name: 'Circuit Breakers & MCBs' } }),
-    ProductCategory.findOrCreate({ where: { name: 'Fans' } }),
-    ProductCategory.findOrCreate({ where: { name: 'Tools & Hardware' } }),
-    ProductCategory.findOrCreate({ where: { name: 'Conduits & Fittings' } }),
-  ]);
+  // Sequential on purpose (see ensureUnits above): one-time bootstrap only.
+  const categories = [
+    'Wires & Cables', 'Switches & Sockets', 'Lighting (Bulbs/LED)',
+    'Circuit Breakers & MCBs', 'Fans', 'Tools & Hardware', 'Conduits & Fittings',
+  ];
+  for (const name of categories) {
+    await ProductCategory.findOrCreate({ where: { name } });
+  }
 
-  await Promise.all([
-    Brand.findOrCreate({ where: { name: 'Orange Electric' } }),
-    Brand.findOrCreate({ where: { name: 'ACL Cables' } }),
-    Brand.findOrCreate({ where: { name: 'Philips' } }),
-    Brand.findOrCreate({ where: { name: 'Schneider Electric' } }),
-    Brand.findOrCreate({ where: { name: 'Generic/Local' } }),
-  ]);
+  const brands = ['Orange Electric', 'ACL Cables', 'Philips', 'Schneider Electric', 'Generic/Local'];
+  for (const name of brands) {
+    await Brand.findOrCreate({ where: { name } });
+  }
 }
 
 async function ensureSettings() {

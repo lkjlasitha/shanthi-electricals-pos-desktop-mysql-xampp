@@ -1,28 +1,53 @@
-const { getMongoConfig } = require('../database/mongoOrm');
+// MongoDB creates its database and collections automatically on first write,
+// so there is no MySQL-style "CREATE DATABASE IF NOT EXISTS" step needed.
+// This module is kept (with the same exported shape) so callers elsewhere
+// don't need to change, and so connection errors still get a helpful,
+// specific message instead of a raw driver stack trace.
+const { MONGODB_URI } = require('./db');
 
-function getDatabaseConfig() {
-  return getMongoConfig();
+async function ensureDatabaseExists() {
+  // No-op for MongoDB.
 }
 
 function formatDatabaseError(error) {
-  const config = getDatabaseConfig();
-  const message = error?.message || String(error);
-  const code = error?.code || error?.codeName;
-  if (code === 'ECONNREFUSED' || /ECONNREFUSED|server selection/i.test(message)) {
-    return `MongoDB is not reachable using MONGODB_URI. Start MongoDB or check the URI, network, TLS, and firewall settings. Database: ${config.database}.`;
+  const message = String(error?.message || error || '');
+
+  if (error?.name === 'MongoServerSelectionError' || /ECONNREFUSED/.test(message)) {
+    return [
+      `MongoDB is not reachable at ${MONGODB_URI}.`,
+      'If you are running MongoDB locally, make sure it is started.',
+      'If you are using MongoDB Atlas, confirm MONGODB_URI in backend/.env and that your IP is allowed in Atlas Network Access.',
+    ].join(' ');
   }
-  if (code === 18 || /Authentication failed/i.test(message)) {
-    return 'MongoDB rejected the supplied credentials. Check the username, password, authentication database, and user permissions.';
+
+  if (/Authentication failed/i.test(message) || error?.code === 18) {
+    return [
+      'MongoDB rejected the connection credentials.',
+      'Check the username and password inside MONGODB_URI in backend/.env.',
+    ].join(' ');
   }
-  if (/Transaction numbers are only allowed|replica set|Transaction support/i.test(message)) {
-    return 'This POS requires MongoDB transaction support. Use MongoDB Atlas, a replica set, or a mongos deployment.';
+
+  if (/replica set|Transaction numbers/i.test(message)) {
+    return [
+      'This MongoDB server does not support transactions (it is not running as a replica set).',
+      'Use a MongoDB Atlas cluster (even the free tier is a replica set) or a local replica set for development.',
+    ].join(' ');
   }
-  return message;
+
+  return message || String(error);
 }
 
-// MongoDB creates a database on its first write. The startup sync creates the
-// collections and indexes, so this compatibility hook intentionally does not
-// perform a separate provisioning query.
-async function ensureDatabaseExists() {}
+function shouldAutoCreateDatabase() {
+  return true; // Always true for MongoDB; kept for API compatibility.
+}
 
-module.exports = { ensureDatabaseExists, formatDatabaseError, getDatabaseConfig };
+function getDatabaseConfig() {
+  return { uri: MONGODB_URI };
+}
+
+module.exports = {
+  ensureDatabaseExists,
+  formatDatabaseError,
+  getDatabaseConfig,
+  shouldAutoCreateDatabase,
+};

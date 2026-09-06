@@ -151,8 +151,15 @@ ExpenseCategory.hasMany(Expense, { foreignKey: 'expense_category_id' });
 Expense.belongsTo(ExpenseCategory, { foreignKey: 'expense_category_id' });
 Expense.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 
+// `sequelize.transaction(async (t) => {...})` is used throughout the
+// controllers exactly as it was with real Sequelize; it now runs a MongoDB
+// session/transaction underneath. Exporting it here (as before) means no
+// controller import line needs to change.
+const { sequelize } = require('../config/sequelizeCompat');
+
 module.exports = {
   ...core,
   ...productModels,
   ...txModels,
+  sequelize,
 };
