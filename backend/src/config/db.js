@@ -222,7 +222,9 @@ class MongoDatabase {
     Model.hasMany = (target, association = {}) => Model.associations.push({ kind: 'hasMany', target, foreignKey: association.foreignKey, as: association.as || pluralize(target.modelName), onDelete: association.onDelete });
     Model.belongsTo = (target, association = {}) => Model.associations.push({ kind: 'belongsTo', target, foreignKey: association.foreignKey, as: association.as || target.modelName, onDelete: association.onDelete });
     Model.findAll = async (queryOptions = {}) => {
-      const aggregateAttrs = (queryOptions.attributes || []).filter(Array.isArray);
+      const aggregateAttrs = Array.isArray(queryOptions.attributes)
+        ? queryOptions.attributes.filter(Array.isArray)
+        : [];
       if (queryOptions.group && aggregateAttrs.length) {
         const groupFields = (Array.isArray(queryOptions.group) ? queryOptions.group : [queryOptions.group]).map((field) => String(field).split('.').pop());
         const pipeline = [{ $match: convertWhere(queryOptions.where) }];

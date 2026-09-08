@@ -51,6 +51,28 @@ test('query compatibility casts array and LIKE filters and keeps association key
   } finally { Product.find = originalFind; ProductCategory.findOne = originalCategoryFindOne; }
 });
 
+test('query compatibility accepts object-form excluded attributes', async () => {
+  const { User } = require('../src/models/associations');
+  const originalFind = User.find;
+  let capturedProjection = '';
+  User.find = () => ({
+    select(value) { capturedProjection = value; return this; },
+    sort() { return this; },
+    skip() { return this; },
+    limit() { return this; },
+    session() { return this; },
+    async exec() { return [new User({ id: 1, name: 'Administrator', password: 'secret' })]; },
+  });
+  try {
+    const rows = await User.findAll({
+      where: { id: 1 },
+      attributes: { exclude: ['password'] },
+    });
+    assert.equal(rows.length, 1);
+    assert.match(capturedProjection, /-password/);
+  } finally { User.find = originalFind; }
+});
+
 test('grouped reports translate required associations into MongoDB lookup pipelines', async () => {
   const database = require('../src/config/db');
   const { Sale, SaleItem } = require('../src/models/associations');

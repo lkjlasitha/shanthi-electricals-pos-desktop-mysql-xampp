@@ -1,7 +1,7 @@
 {
   "name": "shanthi-electricals-pos",
   "productName": "Shanthi Electricals POS",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "private": true,
   "description": "Shanthi Electricals desktop POS with React, Express, Electron and MongoDB",
   "author": "Shanthi Electricals",
