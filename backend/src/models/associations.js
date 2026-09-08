@@ -32,6 +32,7 @@ Unit.belongsTo(BaseUnit, { foreignKey: 'base_unit_id' });
 /* ---------------- Products ---------------- */
 MainProduct.hasMany(Product, { foreignKey: 'main_product_id', as: 'variants' });
 Product.belongsTo(MainProduct, { foreignKey: 'main_product_id' });
+MainProduct.belongsTo(Unit, { as: 'stockUnit', foreignKey: 'product_unit' });
 
 ProductCategory.hasMany(Product, { foreignKey: 'product_category_id' });
 Product.belongsTo(ProductCategory, { foreignKey: 'product_category_id' });
@@ -71,12 +72,15 @@ Purchase.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 Purchase.hasMany(PurchaseItem, { foreignKey: 'purchase_id', onDelete: 'CASCADE', as: 'items' });
 PurchaseItem.belongsTo(Purchase, { foreignKey: 'purchase_id' });
 PurchaseItem.belongsTo(Product, { foreignKey: 'product_id' });
+PurchaseItem.belongsTo(Unit, { as: 'purchaseUnitRef', foreignKey: 'purchase_unit_id' });
 Purchase.hasMany(PurchasePayment, { foreignKey: 'purchase_id', onDelete: 'CASCADE', as: 'payments' });
 PurchasePayment.belongsTo(Purchase, { foreignKey: 'purchase_id' });
 User.hasMany(PurchasePayment, { foreignKey: 'created_by' });
 PurchasePayment.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
 ProductPriceHistory.belongsTo(Purchase, { foreignKey: 'purchase_id' });
 Purchase.hasMany(ProductPriceHistory, { as: 'priceChanges', foreignKey: 'purchase_id' });
+User.hasMany(Purchase, { as: 'createdPurchases', foreignKey: 'created_by' });
+Purchase.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
 
 PurchaseReturn.belongsTo(Purchase, { foreignKey: 'purchase_id' });
 PurchaseReturn.belongsTo(Supplier, { foreignKey: 'supplier_id' });
@@ -97,6 +101,8 @@ SaleItem.belongsTo(Product, { foreignKey: 'product_id' });
 SaleItem.belongsTo(Unit, { as: 'saleUnitRef', foreignKey: 'sale_unit_id' });
 Sale.hasMany(SalesPayment, { foreignKey: 'sale_id', onDelete: 'CASCADE', as: 'payments' });
 SalesPayment.belongsTo(Sale, { foreignKey: 'sale_id' });
+User.hasMany(Sale, { as: 'createdSales', foreignKey: 'created_by' });
+Sale.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
 
 SaleReturn.belongsTo(Sale, { foreignKey: 'sale_id' });
 SaleReturn.belongsTo(Customer, { foreignKey: 'customer_id' });
@@ -125,11 +131,15 @@ Quotation.hasMany(QuotationItem, { foreignKey: 'quotation_id', onDelete: 'CASCAD
 QuotationItem.belongsTo(Product, { foreignKey: 'product_id' });
 QuotationItem.belongsTo(Quotation, { foreignKey: 'quotation_id' });
 QuotationItem.belongsTo(Unit, { as: 'saleUnitRef', foreignKey: 'sale_unit_id' });
+User.hasMany(Quotation, { as: 'createdQuotations', foreignKey: 'created_by' });
+Quotation.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
 
 Hold.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 Hold.belongsTo(Customer, { foreignKey: 'customer_id' });
 Hold.hasMany(HoldItem, { foreignKey: 'hold_id', onDelete: 'CASCADE', as: 'items' });
 HoldItem.belongsTo(Product, { foreignKey: 'product_id' });
+User.hasMany(Hold, { as: 'createdHolds', foreignKey: 'created_by' });
+Hold.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
 
 /* ---------------- Customer account payments ---------------- */
 Customer.hasMany(CustomerPayment, { foreignKey: 'customer_id', onDelete: 'CASCADE', as: 'accountPayments' });
@@ -146,20 +156,15 @@ POSRegister.hasMany(SalesPayment, { foreignKey: 'pos_register_id', as: 'received
 SalesPayment.belongsTo(POSRegister, { foreignKey: 'pos_register_id' });
 POSRegister.hasMany(CustomerPayment, { foreignKey: 'pos_register_id', as: 'receivedCustomerPayments' });
 CustomerPayment.belongsTo(POSRegister, { foreignKey: 'pos_register_id' });
+User.hasMany(CustomerPayment, { as: 'createdCustomerPayments', foreignKey: 'created_by' });
+CustomerPayment.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
 
 ExpenseCategory.hasMany(Expense, { foreignKey: 'expense_category_id' });
 Expense.belongsTo(ExpenseCategory, { foreignKey: 'expense_category_id' });
 Expense.belongsTo(Warehouse, { foreignKey: 'warehouse_id' });
 
-// `sequelize.transaction(async (t) => {...})` is used throughout the
-// controllers exactly as it was with real Sequelize; it now runs a MongoDB
-// session/transaction underneath. Exporting it here (as before) means no
-// controller import line needs to change.
-const { sequelize } = require('../config/sequelizeCompat');
-
 module.exports = {
   ...core,
   ...productModels,
   ...txModels,
-  sequelize,
 };

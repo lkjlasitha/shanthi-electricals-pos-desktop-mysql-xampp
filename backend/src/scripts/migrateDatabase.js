@@ -1,19 +1,25 @@
-require('dotenv').config();
-const { connect, disconnect, MONGODB_URI } = require('../config/db');
-const { formatDatabaseError } = require('../config/databaseSetup');
+const sequelize = require('../config/db');
+const { ensureDatabaseExists, formatDatabaseError, getDatabaseConfig } = require('../config/databaseSetup');
 require('../models/associations'); // register all models before loading the migrator
 const { migrateSchema } = require('../config/schemaMigrator');
 
 async function run() {
   try {
-    await connect();
+    const config = getDatabaseConfig();
+    console.log(`MongoDB configuration source: ${config.source}`);
+    console.log(`MongoDB target: ${config.target}`);
+    for (const warning of config.warnings) console.warn(`Configuration warning: ${warning}`);
+    await ensureDatabaseExists();
+    await sequelize.authenticate();
+    // Create collections/indexes and synchronize numeric id counters.
+    await sequelize.sync({ alter: false });
     await migrateSchema({ verbose: true });
-    console.log(`Database migration successful: ${MONGODB_URI}`);
+    console.log(`MongoDB initialization successful: ${config.database}`);
   } catch (error) {
     console.error(`Database migration failed: ${formatDatabaseError(error)}`);
     process.exitCode = 1;
   } finally {
-    await disconnect().catch(() => {});
+    await sequelize.close().catch(() => {});
   }
 }
 

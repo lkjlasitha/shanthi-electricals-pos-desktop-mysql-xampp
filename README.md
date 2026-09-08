@@ -1,178 +1,111 @@
-# Shanthi Electricals POS — Electron + React + Express + MySQL
+# Shanthi Electricals POS — MongoDB edition
 
-A complete point-of-sale, inventory, purchasing, quotation, return and reporting system for Shanthi Electricals. The project supports both browser development and a Windows desktop installer while keeping **MySQL/MariaDB** as the database.
+Version 2.0 uses MongoDB exclusively. The Express API, React UI, Electron desktop setup, inventory transactions, reports, customer/supplier ledgers, settings, users, and Excel backup/restore no longer require an SQL server or SQL driver.
 
-## Project layout
+## Requirements
 
-```text
-backend/       Express API, Sequelize models, MySQL migrations and services
-frontend/      React + Vite POS interface
-electron/      Desktop main process, secure preload APIs and database setup UI
-resources/     Windows application icons
-forge.config.cjs
-```
+- Node.js 18+
+- MongoDB 6+ as a replica set/sharded cluster, or MongoDB Atlas
 
-## Main features
-
-- JWT authentication with admin, manager and cashier roles
-- Products, product families and individually sellable variants
-- EAN-13/CODE128 barcode generation, scanning and label printing
-- Multi-warehouse stock, transfers and adjustments
-- Product editing with auditable per-warehouse stock corrections and mandatory reasons
-- Supplier bills with supplier invoice numbers, due dates, period filters, overdue totals, partial payments and payment history
-- Ordered, partially-received and received purchase flows; stock changes only for quantities actually received
-- Purchases, sales/POS checkout and cash-register shifts
-- Per-item percentage/fixed discounts with quick 5% and 10% actions
-- Quick/manual bill items for products not yet saved in the catalogue
-- Original-document sale and purchase returns with quantity protection
-- Full-page quotations with temporary prices, line/order discounts, cost and estimated profit, expiry handling, and controlled conversion to paid/partial/credit invoices
-- Customer credit accounts with payment terms, invoice due dates, overdue receivables, oldest-debt-first account payments, bill goods/payment detail, and credit-limit warnings in POS
-- Customers, suppliers, expenses and settings
-- Dashboard KPIs, charts, stock valuation and low-stock alerts
-- A4 documents, 80 mm receipts, PDF and Excel exports
-- Full-database Excel backup and guarded restore
-- Electron desktop app with XAMPP detection and MySQL credential setup
-- Native Windows printer selection and optional silent receipt printing
-
-## Windows desktop application
-
-The desktop build contains Electron, React and Express. It does not embed MySQL. On first launch it offers:
-
-1. **Use XAMPP** — detect local XAMPP/MariaDB and its configured port.
-2. **Use MySQL Server** — enter a local, standalone or network MySQL/MariaDB host, port, username and password.
-
-The recommended setup creates a dedicated POS database account and does not retain the MySQL administrator password. Saved application credentials and the JWT secret are encrypted by the operating system.
-
-Complete instructions are in [DESKTOP_MYSQL_INSTALLATION.md](DESKTOP_MYSQL_INSTALLATION.md).
-
-### Run the desktop app during development
-
-```powershell
-npm install
-npm run verify
-npm run desktop:start
-```
-
-### Build the Windows installer
-
-```powershell
-npm install
-npm run desktop:make:win
-```
-
-The installer is generated under:
-
-```text
-out\make\squirrel.windows\x64\Shanthi Electricals POS Setup.exe
-```
-
-The target computer requires XAMPP/MySQL locally or access to a network MySQL server. It does not require Node.js, npm or the source project.
+MongoDB transactions are used for sales, purchases, returns, stock movements, customer receipts, and quotation conversion. The application therefore requires a replica set or sharded cluster and rejects a standalone `mongod`. Atlas already supplies a suitable topology.
 
 ## Browser development
 
-Copy the backend environment template:
-
-```powershell
-copy backend\.env.example backend\.env
-```
-
-Edit `backend/.env`, start MySQL/MariaDB, then run:
-
-```powershell
+```bash
 npm install
+cp backend/.env.example backend/.env
+# Edit MONGODB_URI and JWT_SECRET in backend/.env (project-root .env is also supported)
 npm run db:setup
 npm run dev
 ```
 
-Development URLs:
+Frontend: `http://localhost:5173`  
+API: `http://localhost:4000/api`
 
-- API: `http://localhost:4000`
-- React: `http://localhost:5173`
+Useful commands:
 
-The Vite server proxies `/api` to Express.
-
-## Useful commands
-
-```text
-npm run dev                 browser development
-npm run test                backend and desktop service tests
-npm run build               React production build
-npm run verify              tests plus production build
-npm run db:check            test the .env MySQL connection
-npm run db:migrate          additive schema migration
-npm run db:doctor           inspect required MySQL columns
-npm run seed                create defaults for browser development
-npm run desktop:start       build and open Electron
-npm run desktop:package     create an unpacked desktop package
-npm run desktop:make:win    create the Windows installer
+```bash
+npm run db:check       # verify MongoDB connectivity
+npm run db:migrate     # create indexes and synchronize numeric ID counters
+npm run db:doctor      # show collection counts/indexes and transaction capability
+npm run seed           # create defaults/admin when absent
+npm run verify         # backend/Electron tests plus frontend production build
+npm run test:integration # destructive smoke test; requires TEST_MONGODB_URI ending in _test
 ```
 
-## First database initialization
+## Desktop application
 
-The desktop setup performs this automatically. For browser development, `npm run db:setup`:
+Build or run the desktop application as before:
 
-- creates the configured database when allowed
-- creates missing tables
-- runs additive, non-destructive schema migrations
-- verifies critical reporting and product-variant columns
-- creates roles, warehouse, LKR currency, units, categories, brands and settings
-- creates the seed administrator when no matching user exists
-
-Change the browser seed administrator password after first login. The desktop setup requires the user to choose the first POS password instead of relying on a default.
-
-When upgrading an existing installation to v1.8.0, create a full Excel backup first. Desktop startup runs the additive supplier-bill/receipt/payment migration automatically; browser-development installations should run `npm run db:migrate` followed by `npm run db:doctor`.
-
-## MySQL/XAMPP behaviour
-
-`ECONNREFUSED` means no database server is accepting connections at the selected host and port. Start MySQL in XAMPP or start the standalone MySQL/MariaDB Windows service.
-
-For a central server, configure:
-
-- a stable LAN IP address
-- Windows Firewall inbound access to the selected MySQL port
-- MySQL/MariaDB `bind-address`
-- a MySQL account allowed from the POS computer
-
-Do not restore separate copies of the same backup on every client when all clients share one central database.
-
-## Desktop data and security
-
-The installed application does not write into `Program Files`. Per-user files are stored under:
-
-```text
-%APPDATA%\Shanthi Electricals POS\
-├── config\database.json
-├── app-data\backups\
-└── logs\desktop.log
+```bash
+npm run desktop:start
+npm run desktop:make:win
 ```
 
-The MySQL database remains on the selected database server. **Settings → Change Database** removes only the local encrypted connection configuration and restarts setup; it does not remove MySQL data.
+First-run setup now asks for one MongoDB URI. The URI and generated JWT secret are encrypted with Electron `safeStorage`. MongoDB creates the selected database on its first write.
 
-Electron renderer windows use context isolation, sandboxing and narrow preload APIs. React does not receive direct Node.js, filesystem, shell or MySQL access.
+Examples:
 
-## Printing and barcode readers
+```text
+mongodb://127.0.0.1:27017/electro_pos?replicaSet=rs0
+mongodb+srv://POS_USER:PASSWORD@CLUSTER/electro_pos?retryWrites=true&w=majority
+```
 
-A standard USB barcode reader should be configured as a USB HID keyboard with Enter/CR after each scan.
+Give the application account read/write access to only the `electro_pos` database. For Atlas, also allow the shop computer/network in the Atlas network access list.
 
-In the desktop application, **Settings → Desktop application** can enumerate Windows printers. Select the thermal printer and test with silent printing disabled. A4 documents always use the normal print dialog. Browser mode continues to use a browser print popup.
+Keep `MONGODB_URI` quoted in `.env`. Characters in the username or password that
+have URI meaning must be percent-encoded (for example `@` as `%40`, `#` as `%23`,
+`:` as `%3A`, and `/` as `%2F`). `npm run db:check` prints which `.env` source was
+selected and a credential-free target. On failure it reports the underlying DNS,
+TLS, authentication, parsing, refusal, or timeout detail without printing secrets.
+If both files define the URI, `backend/.env` takes precedence over the project-root
+`.env`; an OS or Electron-provided environment variable takes precedence over both.
 
-## Excel backup and restore
+If Node reports `querySrv ECONNREFUSED` while an explicit public-DNS test works,
+add the following optional setting to `backend/.env`. It changes DNS resolution
+for this Node/Electron process only and does not modify Windows network settings:
 
-Open **Settings → Full Excel backup** to download every table in one `.xlsx` workbook. It contains commercial data and password hashes, so protect it as a database dump.
+```dotenv
+MONGODB_DNS_SERVERS=8.8.8.8,1.1.1.1
+```
 
-Restore requires typing `RESTORE`. Before replacing table data, the server writes a safety workbook. In desktop mode it is stored under the app-data backup directory; in browser mode it remains under `backend/backups` unless `POS_DATA_DIR` is configured.
+## Authentication diagnostics
 
-## Product variants
+The desktop login now validates the newly issued token through `/api/auth/me`
+before opening the POS. A successful login therefore produces one successful
+session request followed by the protected POS data requests. Startup migration
+repairs older MongoDB documents that are missing public numeric IDs, and new
+tokens use the stable MongoDB document ID as their subject.
 
-A product can remain a single item or become a family with separately priced, stocked and barcoded variants. Examples include wire length/colour, cable size/core count and bulb wattage/colour. See [PRODUCT_VARIANTS_GUIDE.md](PRODUCT_VARIANTS_GUIDE.md).
+Authentication failures are separated in the API response and desktop log:
+`AUTH_TOKEN_INVALID` means the token is expired or was signed with an older
+secret, `AUTH_IDENTITY_INVALID` means a legacy token has no usable identity, and
+`AUTH_USER_INVALID` means its user is missing or inactive. Database failures are
+reported as server/database failures rather than incorrectly becoming HTTP 401.
 
-## Release information
+## Moving existing SQL data
 
-- [V1.8.0_RELEASE_NOTES.md](V1.8.0_RELEASE_NOTES.md)
-- [QA_REPORT_V1.8.0.md](QA_REPORT_V1.8.0.md)
-- [V1.7.0_RELEASE_NOTES.md](V1.7.0_RELEASE_NOTES.md)
-- [QUOTATIONS_CUSTOMER_PIPELINE_QA_RELEASE.md](QUOTATIONS_CUSTOMER_PIPELINE_QA_RELEASE.md)
-- [POS_INPUT_DISCOUNT_QUICK_ITEM_RELEASE.md](POS_INPUT_DISCOUNT_QUICK_ITEM_RELEASE.md)
-- [DESKTOP_RELEASE_NOTES.md](DESKTOP_RELEASE_NOTES.md)
-- [VARIANT_RELEASE_NOTES.md](VARIANT_RELEASE_NOTES.md)
-- [VALIDATION.md](VALIDATION.md)
+The MongoDB edition can restore the Excel workbook generated by the old POS under **Settings → Backup → Export**. This is the safest migration path because it preserves the existing numeric IDs used by historical invoices and their related line items.
+
+1. In the old SQL-based application, stop sales and create a final Excel backup.
+2. Keep an additional untouched copy of that workbook.
+3. Start this MongoDB edition against an empty MongoDB database.
+4. In **Settings → Backup**, restore the old workbook.
+5. Run `npm run db:doctor`, then compare customer balances, supplier payables, stock, several invoices, returns, and dashboard totals with the old system.
+6. Keep the old database read-only until the verification is signed off.
+
+Backup format v2 records MongoDB as its source. Restore remains backward-compatible with the v1 Excel backup generated by the SQL edition. Restore is all-or-nothing and creates a safety backup first.
+
+## Data model
+
+Collections retain the former API-facing names and integer `id` fields, so no frontend contract changes are required. MongoDB `_id` values remain internal. Relationships use those integer IDs, and a private `_counters` collection allocates new IDs atomically.
+
+Main collections include users/roles, products/variants/stock, warehouses, customers, suppliers, sales and payments, purchases and payments, quotations, holds, returns, transfers, adjustments, expenses, registers, and settings.
+
+## Security and operations
+
+- Never commit `backend/.env` or share a URI containing credentials.
+- Use TLS for remote MongoDB connections.
+- Back up through the POS regularly and also configure provider-level snapshots.
+- Monitor free disk space and MongoDB health.
+- Limit the database user's role to the POS database.

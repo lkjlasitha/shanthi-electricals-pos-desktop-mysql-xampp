@@ -30,13 +30,9 @@ function saveDatabaseConfig(config) {
   fs.mkdirSync(configDirectory, { recursive: true });
 
   const payload = {
-    schemaVersion: 1,
-    mode: config.mode === 'xampp' ? 'xampp' : 'mysql',
-    host: String(config.host),
-    port: Number(config.port),
-    database: String(config.database),
-    username: String(config.username),
-    encryptedPassword: encrypt(config.password),
+    schemaVersion: 2,
+    mode: 'mongodb',
+    encryptedUri: encrypt(config.uri),
     encryptedJwtSecret: encrypt(config.jwtSecret),
     savedAt: new Date().toISOString(),
   };
@@ -54,18 +50,14 @@ function loadDatabaseConfig() {
   if (!fs.existsSync(target)) return null;
   const saved = JSON.parse(fs.readFileSync(target, 'utf8'));
 
-  if (Number(saved.schemaVersion || 0) !== 1) {
+  if (Number(saved.schemaVersion || 0) !== 2) {
     throw new Error('The saved database configuration format is not supported.');
   }
 
   return {
-    schemaVersion: 1,
-    mode: saved.mode === 'xampp' ? 'xampp' : 'mysql',
-    host: saved.host,
-    port: Number(saved.port || 3306),
-    database: saved.database,
-    username: saved.username,
-    password: decrypt(saved.encryptedPassword),
+    schemaVersion: 2,
+    mode: 'mongodb',
+    uri: decrypt(saved.encryptedUri),
     jwtSecret: decrypt(saved.encryptedJwtSecret),
   };
 }
@@ -73,13 +65,10 @@ function loadDatabaseConfig() {
 function getPublicDatabaseConfig() {
   const config = loadDatabaseConfig();
   if (!config) return null;
-  return {
-    mode: config.mode,
-    host: config.host,
-    port: config.port,
-    database: config.database,
-    username: config.username,
-  };
+  try {
+    const parsed = new URL(config.uri);
+    return { mode: 'mongodb', host: parsed.hostname, database: parsed.pathname.replace(/^\//, '').split('?')[0] || '(default)' };
+  } catch { return { mode: 'mongodb', host: 'configured server', database: '(default)' }; }
 }
 
 function deleteDatabaseConfig() {

@@ -2,21 +2,21 @@ async function startDesktopServer({ frontendDirectory, bootstrapAdmin } = {}) {
   if (!frontendDirectory) throw new Error('The frontend build directory is required.');
   if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET must be configured before the desktop backend starts.');
 
-  // These modules must be loaded only after Electron applies the saved
-  // database configuration (MONGODB_URI) to process.env.
-  const { connect, disconnect } = require('./config/db');
+  // Load after Electron applies the encrypted MongoDB URI to process.env.
+  const sequelize = require('./config/db');
   require('./models/associations');
   const { migrateSchema } = require('./config/schemaMigrator');
   const { bootstrapShopData } = require('./services/bootstrapService');
   const { createApp } = require('./app');
 
   try {
-    await connect();
+    await sequelize.authenticate();
+    await sequelize.sync({ alter: false });
     await migrateSchema({ verbose: true });
     await bootstrapShopData({ admin: bootstrapAdmin, requireAdmin: true });
   } catch (error) {
     try {
-      await disconnect();
+      await sequelize.close();
     } catch {
       // Preserve the original startup error.
     }
@@ -36,14 +36,14 @@ async function startDesktopServer({ frontendDirectory, bootstrapAdmin } = {}) {
         port: address.port,
         async close() {
           await new Promise((done) => server.close(done));
-          await disconnect();
+          await sequelize.close();
         },
       });
     });
 
     server.once('error', async (error) => {
       try {
-        await disconnect();
+        await sequelize.close();
       } catch {
         // Preserve the listener error.
       }

@@ -1,4 +1,4 @@
-const { Op } = require('../config/sequelizeCompat');
+const { Op } = require('../config/db');
 const {
   Transfer, TransferItem, Adjustment, AdjustmentItem, Warehouse, Product, User, sequelize,
 } = require('../models/associations');
@@ -35,10 +35,8 @@ function cleanItems(rows, kind) {
 }
 
 async function assertReferences({ warehouseIds, productIds, transaction }) {
-  const [warehouseCount, productCount] = await Promise.all([
-    Warehouse.count({ where: { id: { [Op.in]: warehouseIds } }, transaction }),
-    Product.count({ where: { id: { [Op.in]: productIds }, is_active: true }, transaction }),
-  ]);
+  const warehouseCount = await Warehouse.count({ where: { id: { [Op.in]: warehouseIds } }, transaction });
+  const productCount = await Product.count({ where: { id: { [Op.in]: productIds }, is_active: true }, transaction });
   if (warehouseCount !== new Set(warehouseIds).size) throw new HttpError(422, 'One or more selected warehouses no longer exists.');
   if (productCount !== new Set(productIds).size) throw new HttpError(422, 'One or more selected products no longer exists or is inactive.');
 }

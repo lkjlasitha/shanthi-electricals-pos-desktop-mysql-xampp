@@ -1,4 +1,4 @@
-const { Op } = require('../config/sequelizeCompat');
+const { Op } = require('../config/db');
 const {
   Purchase,
   PurchaseItem,
@@ -137,10 +137,8 @@ const create = asyncHandler(async (req, res) => {
   }
 
   const result = await sequelize.transaction(async (transaction) => {
-    const [supplier, warehouse] = await Promise.all([
-      Supplier.findByPk(supplierId, { transaction, lock: transaction.LOCK.SHARE }),
-      Warehouse.findByPk(warehouseId, { transaction, lock: transaction.LOCK.SHARE }),
-    ]);
+    const supplier = await Supplier.findByPk(supplierId, { transaction, lock: transaction.LOCK.SHARE });
+    const warehouse = await Warehouse.findByPk(warehouseId, { transaction, lock: transaction.LOCK.SHARE });
     if (!supplier) throw new HttpError(422, 'The selected supplier no longer exists. Refresh and select it again.');
     if (!warehouse) throw new HttpError(422, 'The selected warehouse no longer exists. Refresh and select it again.');
 
@@ -321,7 +319,7 @@ const receive = asyncHandler(async (req, res) => {
     for (const increment of plan.increments) {
       const item = items.find((row) => Number(row.id) === increment.purchase_item_id);
       item.received_quantity = increment.new_received_quantity;
-      await item.save({ transaction });
+      await item.save({ session: transaction.session });
       await adjustStock({
         productId: increment.product_id,
         warehouseId: purchase.warehouse_id,
@@ -333,7 +331,7 @@ const receive = asyncHandler(async (req, res) => {
     if (plan.status === 'received') purchase.received_at = receiptDate;
     const receiptNote = cleanOptionalText(req.body?.note, 'Receipt note', 1000);
     if (receiptNote) purchase.notes = [purchase.notes, `Receipt ${receiptDate}: ${receiptNote}`].filter(Boolean).join('\n');
-    await purchase.save({ transaction });
+    await purchase.save({ session: transaction.session });
     return purchase;
   });
 
@@ -371,7 +369,7 @@ const addPayment = asyncHandler(async (req, res) => {
     purchase.paid_amount = newPaid;
     purchase.received_amount = newPaid;
     purchase.payment_status = computePurchaseBalance({ ...purchase.toJSON(), paid_amount: newPaid }).payment_status;
-    await purchase.save({ transaction });
+    await purchase.save({ session: transaction.session });
     return purchase;
   });
 
@@ -393,7 +391,7 @@ const cancel = asyncHandler(async (req, res) => {
     if (!reason) throw new HttpError(422, 'Enter a cancellation reason.');
     purchase.status = 'cancelled';
     purchase.notes = [purchase.notes, `Cancelled: ${reason}`].filter(Boolean).join('\n');
-    await purchase.save({ transaction });
+    await purchase.save({ session: transaction.session });
     return purchase;
   });
   const full = await Purchase.findByPk(result.id, { include: includeGraph });

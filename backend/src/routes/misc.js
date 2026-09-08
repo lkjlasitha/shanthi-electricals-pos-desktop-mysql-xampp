@@ -13,12 +13,14 @@ router.use(authenticate);
 
 // Expenses
 router.get('/expenses', expenseController.list);
+router.get('/expenses/:id', expenseController.getOne);
 router.post('/expenses', requirePermission('expenses.manage'), expenseController.create);
 router.put('/expenses/:id', requirePermission('expenses.manage'), expenseController.update);
 router.delete('/expenses/:id', requirePermission('expenses.manage'), expenseController.remove);
 
 const categoryHandlers = crudFactory(ExpenseCategory, { order: [['name', 'ASC']] });
 router.get('/expense-categories', categoryHandlers.list);
+router.get('/expense-categories/:id', categoryHandlers.getOne);
 router.post('/expense-categories', requirePermission('expenses.manage'), categoryHandlers.create);
 router.put('/expense-categories/:id', requirePermission('expenses.manage'), categoryHandlers.update);
 router.delete('/expense-categories/:id', requirePermission('expenses.manage'), categoryHandlers.remove);

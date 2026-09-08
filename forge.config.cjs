@@ -25,6 +25,7 @@ module.exports = {
       /^\/\.git($|\/)/,
       /^\/development-data($|\/)/,
       /^\/backend\/backups($|\/)/,
+      /^\/\.env$/,
       /^\/backend\/\.env$/,
     ],
   },

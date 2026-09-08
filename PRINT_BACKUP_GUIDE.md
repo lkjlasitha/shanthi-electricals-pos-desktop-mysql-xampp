@@ -1,48 +1,22 @@
-# Shanthi Electricals Printing, Downloads and Backup Guide
+# Printing and MongoDB backup guide
 
-## Document output
+## Printing
 
-The Laravel project's invoice/quotation approach was used as the functional reference: business identity, reference/date/status, customer or supplier information, line items, tax/discount/shipping totals, payment totals, notes and a footer.
+Invoices, quotations, purchase documents, returns, transfers, and adjustments can be printed or downloaded from their document actions. Desktop printing is performed in an isolated Electron window; browser printing uses the normal browser dialog.
 
-The Node implementation provides:
+## Excel backup
 
-| Workflow | Browser print | PDF download |
-|---|---:|---:|
-| POS sale | 80 mm receipt | 80 mm receipt and A4 invoice |
-| Sales history | 80 mm receipt | 80 mm receipt and A4 invoice |
-| Quotation | A4 | A4 |
-| Purchase | A4 | A4 |
-| Sale return | A4 credit note | A4 |
-| Purchase return | A4 | A4 |
-| Stock transfer | A4 transfer note | A4 |
-| Stock adjustment | A4 adjustment note | A4 |
-| Reports | A4/landscape table | PDF and Excel |
+Use **Settings → Backup → Export** to generate one `.xlsx` workbook containing metadata and one worksheet per MongoDB application collection. The workbook contains business data and password hashes, so store it securely.
 
-Document business information is controlled from **Settings**. No browser-generated PDF library is required: backend PDFs use PDFKit, while browser print views use a dedicated print-only HTML layout.
+Restore validates the workbook's application marker, format, collection map, and completeness before changing data. It then:
 
-## Full Excel backup
+1. Creates a timestamped safety backup.
+2. Opens a MongoDB transaction.
+3. Clears the application collections.
+4. Inserts all workbook rows and restores their numeric IDs.
+5. Synchronizes atomic ID counters.
+6. Commits everything together or rolls everything back on failure.
 
-`GET /api/backup/export` creates an Excel workbook with:
+The MongoDB edition accepts format-v2 backups and the format-v1 workbooks exported by the former SQL edition. Do not edit workbook values or worksheet names before restore.
 
-- A `_shanthi_backup` metadata worksheet.
-- A table-to-worksheet map.
-- One worksheet per MySQL base table.
-- Original primary keys, foreign keys, timestamps, settings, stock, transactions, users and password hashes.
-
-Only a user with `settings.manage` permission can export or restore a backup.
-
-## Restore safety
-
-`POST /api/backup/import` accepts one `.xlsx` file up to 50 MB and requires the confirmation value `RESTORE`.
-
-Before replacing data, the backend writes an automatic workbook to `backend/backups/pre-restore-<timestamp>.xlsx`. The restore then:
-
-1. Validates the application marker and backup format version.
-2. Validates every mapped worksheet and requires the backup table set to match the current database schema.
-3. Starts a database transaction.
-4. Temporarily disables foreign-key checks on that transaction's MySQL connection.
-5. Clears and repopulates the backed-up tables while preserving IDs.
-6. Re-enables foreign-key checks in a `finally` block.
-7. Commits only when every table succeeds.
-
-Do not treat Excel backup as the only production disaster-recovery mechanism. Keep scheduled MySQL backups as well.
+Excel backups are intended for portable application-level recovery and migration. Also configure scheduled MongoDB snapshots/provider backups and regularly test restoration against a non-production database.

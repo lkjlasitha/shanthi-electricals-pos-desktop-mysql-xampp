@@ -1,4 +1,5 @@
-const { defineModel, DataTypes } = require('../config/sequelizeCompat');
+const sequelize = require('../config/db');
+const { DataTypes } = sequelize;
 
 /* ============================================================
    PRODUCTS, VARIATIONS & STOCK
@@ -7,7 +8,7 @@ const { defineModel, DataTypes } = require('../config/sequelizeCompat');
 // A "main product" groups either a single product or a family of variation
 // products (e.g. "LED Bulb 9W" as the main product, with variation products
 // per color/wattage). Mirrors the original Laravel schema.
-const MainProduct = defineModel('MainProduct', {
+const MainProduct = sequelize.define('MainProduct', {
   name: { type: DataTypes.STRING, allowNull: false },
   code: { type: DataTypes.STRING, allowNull: false, unique: true },
   product_unit: { type: DataTypes.INTEGER, allowNull: true },
@@ -16,7 +17,7 @@ const MainProduct = defineModel('MainProduct', {
   image: { type: DataTypes.STRING, allowNull: true },
 }, { tableName: 'main_products' });
 
-const Product = defineModel('Product', {
+const Product = sequelize.define('Product', {
   main_product_id: { type: DataTypes.INTEGER, allowNull: true },
   variant_name: { type: DataTypes.STRING, allowNull: true },
   variant_attributes: { type: DataTypes.JSON, allowNull: true },
@@ -42,7 +43,7 @@ const Product = defineModel('Product', {
 
 // Auditable history for every cost/selling-price change. This keeps old
 // invoices unchanged while showing when and why the catalogue price moved.
-const ProductPriceHistory = defineModel('ProductPriceHistory', {
+const ProductPriceHistory = sequelize.define('ProductPriceHistory', {
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   old_cost: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
   new_cost: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
@@ -64,16 +65,16 @@ const ProductPriceHistory = defineModel('ProductPriceHistory', {
   ],
 });
 
-const Variation = defineModel('Variation', {
+const Variation = sequelize.define('Variation', {
   name: { type: DataTypes.STRING, allowNull: false, unique: true }, // e.g. "Wattage", "Color"
 }, { tableName: 'variations' });
 
-const VariationType = defineModel('VariationType', {
+const VariationType = sequelize.define('VariationType', {
   variation_id: { type: DataTypes.INTEGER, allowNull: false },
   name: { type: DataTypes.STRING, allowNull: false }, // e.g. "9W", "Red"
 }, { tableName: 'variation_types' });
 
-const VariationProduct = defineModel('VariationProduct', {
+const VariationProduct = sequelize.define('VariationProduct', {
   main_product_id: { type: DataTypes.INTEGER, allowNull: true },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   variation_id: { type: DataTypes.INTEGER, allowNull: false },
@@ -81,7 +82,7 @@ const VariationProduct = defineModel('VariationProduct', {
 }, { tableName: 'variation_products' });
 
 // Per-warehouse stock quantity for a product
-const ManageStock = defineModel('ManageStock', {
+const ManageStock = sequelize.define('ManageStock', {
   warehouse_id: { type: DataTypes.INTEGER, allowNull: false },
   product_id: { type: DataTypes.INTEGER, allowNull: false },
   quantity: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },

@@ -1,15 +1,15 @@
-const { Op } = require('../config/sequelizeCompat');
+const { Op } = require('../config/db');
 const { asyncHandler } = require('./helpers');
 
 /**
- * Builds standard list/get/create/update/delete handlers for a Sequelize model.
+ * Builds standard list/get/create/update/delete handlers for a data model.
  * Keeps the many near-identical master-data resources (categories, brands,
  * units, warehouses, suppliers, customers, currencies, roles...) consistent
  * and free of copy-paste bugs.
  *
  * options:
  *  - searchFields: string[] columns matched against ?search=
- *  - include: Sequelize include array applied on list/get
+ *  - include: association include array applied on list/get
  *  - order: default ordering, e.g. [['name', 'ASC']]
  *  - beforeCreate/beforeUpdate: optional (req, data) => data hooks
  */

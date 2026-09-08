@@ -1,16 +1,24 @@
-require('dotenv').config();
-const { connect, disconnect, MONGODB_URI } = require('../config/db');
-const { formatDatabaseError } = require('../config/databaseSetup');
+const sequelize = require('../config/db');
+const {
+  ensureDatabaseExists,
+  formatDatabaseError,
+  getDatabaseConfig,
+} = require('../config/databaseSetup');
 
 async function run() {
   try {
-    await connect();
-    console.log(`Database connection successful: ${MONGODB_URI}`);
+    const config = getDatabaseConfig();
+    console.log(`MongoDB configuration source: ${config.source}`);
+    console.log(`MongoDB target: ${config.target}`);
+    for (const warning of config.warnings) console.warn(`Configuration warning: ${warning}`);
+    await ensureDatabaseExists();
+    await sequelize.authenticate();
+    console.log(`MongoDB connection successful: ${config.database}`);
   } catch (error) {
     console.error(`Database check failed: ${formatDatabaseError(error)}`);
     process.exitCode = 1;
   } finally {
-    await disconnect().catch(() => {});
+    await sequelize.close().catch(() => {});
   }
 }
 

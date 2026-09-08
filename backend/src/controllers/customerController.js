@@ -190,7 +190,7 @@ const addAccountPayment = asyncHandler(async (req, res) => {
 
       sale.paid_amount = Math.min(Number(sale.grand_total), Number(sale.paid_amount || 0) + allocation.amount);
       sale.payment_status = sale.paid_amount >= Number(sale.grand_total) - 0.005 ? 'paid' : 'partial';
-      await sale.save({ transaction });
+      await sale.save({ session: transaction.session });
     }
 
     return payment.id;

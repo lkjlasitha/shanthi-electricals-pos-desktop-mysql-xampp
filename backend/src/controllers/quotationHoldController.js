@@ -1,4 +1,4 @@
-const { Op } = require('../config/sequelizeCompat');
+const { Op } = require('../config/db');
 const {
   Quotation, QuotationItem, Hold, HoldItem, Customer, Warehouse, Product, Unit,
   Sale, SaleItem, SalesPayment, POSRegister, sequelize,
@@ -310,7 +310,7 @@ const convertQuotationToSale = asyncHandler(async (req, res) => {
 
     quotation.status = 'converted';
     quotation.converted_sale_id = sale.id;
-    await quotation.save({ transaction: t });
+    await quotation.save({ session: t.session });
 
     return sale;
   });

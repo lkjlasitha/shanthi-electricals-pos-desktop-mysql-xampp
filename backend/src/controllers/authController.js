@@ -4,7 +4,10 @@ const { User, Role, Warehouse } = require('../models/associations');
 const { asyncHandler } = require('../utils/helpers');
 
 function signToken(user) {
-  return jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+  if (!user?._id) throw new Error('Cannot create an authentication token for a user without a MongoDB document ID.');
+  const numericId = Number(user.id);
+  return jwt.sign({ ...(Number.isSafeInteger(numericId) && numericId > 0 ? { id: numericId } : {}) }, process.env.JWT_SECRET, {
+    subject: String(user._id),
     expiresIn: process.env.JWT_EXPIRES_IN || '12h',
   });
 }
@@ -27,11 +30,9 @@ const login = asyncHandler(async (req, res) => {
 });
 
 const me = asyncHandler(async (req, res) => {
-  const user = await User.findByPk(req.user.id, {
-    include: [Role, Warehouse],
-    attributes: { exclude: ['password'] },
-  });
-  res.json({ data: user });
+  // authenticate() already loaded and validated the current user with both
+  // associations. Returning it avoids a second identity lookup.
+  res.json({ data: req.user });
 });
 
 const changePassword = asyncHandler(async (req, res) => {
@@ -48,4 +49,4 @@ const changePassword = asyncHandler(async (req, res) => {
   res.json({ message: 'Password updated' });
 });
 
-module.exports = { login, me, changePassword };
+module.exports = { login, me, changePassword, signToken };

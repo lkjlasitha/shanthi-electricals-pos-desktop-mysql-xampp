@@ -1,6 +1,6 @@
 const { Expense, ExpenseCategory, Warehouse } = require('../models/associations');
 const { asyncHandler } = require('../utils/helpers');
-const { Op } = require('../config/sequelizeCompat');
+const { Op } = require('../config/db');
 
 const list = asyncHandler(async (req, res) => {
   const where = {};
@@ -8,6 +8,12 @@ const list = asyncHandler(async (req, res) => {
   if (req.query.warehouse_id) where.warehouse_id = req.query.warehouse_id;
   const expenses = await Expense.findAll({ where, include: [ExpenseCategory, Warehouse], order: [['id', 'DESC']] });
   res.json({ data: expenses });
+});
+
+const getOne = asyncHandler(async (req, res) => {
+  const expense = await Expense.findByPk(req.params.id, { include: [ExpenseCategory, Warehouse] });
+  if (!expense) return res.status(404).json({ message: 'Not found' });
+  res.json({ data: expense });
 });
 
 const create = asyncHandler(async (req, res) => {
@@ -29,4 +35,4 @@ const remove = asyncHandler(async (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-module.exports = { list, create, update, remove };
+module.exports = { list, getOne, create, update, remove };

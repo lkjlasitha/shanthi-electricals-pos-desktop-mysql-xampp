@@ -23,6 +23,10 @@ function errorHandler(err, req, res, next) { // eslint-disable-line no-unused-va
     });
   }
 
+  if (err.name === 'MongoReferenceConstraintError') {
+    return res.status(409).json({ message: err.message, field: err.field || null });
+  }
+
   if (err.name === 'HttpError' || err.status) {
     return res.status(err.status || 500).json({
       message: err.message || 'Request failed',
@@ -30,55 +34,27 @@ function errorHandler(err, req, res, next) { // eslint-disable-line no-unused-va
     });
   }
 
-  if (err.name === 'SequelizeUniqueConstraintError') {
+  if (err.code === 11000) {
     return res.status(409).json({
       message: 'A record with this value already exists.',
-      fields: err.fields,
+      fields: Object.keys(err.keyPattern || {}),
     });
   }
 
-  if (err.name === 'SequelizeValidationError') {
+  if (err.name === 'ValidationError') {
     return res.status(422).json({
-      message: err.errors.map((error) => error.message).join(', '),
-      fields: err.errors.map((error) => error.path).filter(Boolean),
+      message: Object.values(err.errors || {}).map((error) => error.message).join(', '),
+      fields: Object.values(err.errors || {}).map((error) => error.path).filter(Boolean),
     });
   }
 
-  if (err.name === 'SequelizeForeignKeyConstraintError') {
-    const code = err.parent?.code || err.original?.code;
-    const field = Array.isArray(err.fields) ? err.fields[0] : Object.keys(err.fields || {})[0] || null;
-
-    if (code === 'ER_NO_REFERENCED_ROW_2') {
-      return res.status(422).json({
-        message: field
-          ? `The selected value for "${field}" does not exist. Refresh the page and select a valid option.`
-          : 'One of the selected category, brand, unit, warehouse, customer, or supplier records does not exist.',
-        field,
-      });
-    }
-
-    return res.status(409).json({
-      message: 'This record is already used elsewhere and cannot be deleted.',
-      field,
-    });
-  }
-
-  if (err.name === 'SequelizeDatabaseError') {
-    const code = err.parent?.code || err.original?.code;
-    if (code === 'ER_BAD_FIELD_ERROR') {
-      return res.status(500).json({
-        message: 'The database schema is out of date. Stop the app, run "npm run db:migrate", and start it again.',
-      });
-    }
-  }
-
-  const connectionCode = err.original?.code || err.parent?.code || err.code;
-  if (['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT'].includes(connectionCode)) {
+  const connectionCode = err.code;
+  if (['TransientTransactionError', 112, 251].includes(connectionCode) || err.hasErrorLabel?.('TransientTransactionError')) {
     return res.status(409).json({ message: 'Another stock or payment update was happening at the same time. Please try again.' });
   }
-  if (['ECONNREFUSED', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST', 'EPIPE', 'ENOTFOUND'].includes(connectionCode)
-      || String(err.name || '').startsWith('SequelizeConnection')) {
-    return res.status(503).json({ message: 'The database server is temporarily unreachable. Check MySQL and try again.' });
+  if (['ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'ENOTFOUND'].includes(connectionCode)
+      || /ServerSelectionError$/.test(err.name || '') || err.name === 'MongoNetworkError') {
+    return res.status(503).json({ message: 'MongoDB is temporarily unreachable. Check the database server and try again.' });
   }
 
   res.status(500).json({ message: 'Something went wrong on the server.' });

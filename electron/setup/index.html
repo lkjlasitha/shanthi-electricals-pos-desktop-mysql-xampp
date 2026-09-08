@@ -18,7 +18,7 @@
           <p class="eyebrow">FIRST-RUN DATABASE SETUP</p>
           <h1>Shanthi Electricals POS</h1>
           <p class="subtitle">
-            Connect this desktop application to XAMPP MariaDB or another MySQL/MariaDB server.
+            Connect this desktop application to a MongoDB deployment.
           </p>
         </div>
       </header>
@@ -26,82 +26,17 @@
       <div id="startup-message" class="notice hidden"></div>
 
       <section class="panel">
-        <h2>1. Choose the database server</h2>
-        <div class="mode-grid">
-          <label class="mode-card selected" data-mode-card="xampp">
-            <input type="radio" name="mode" value="xampp" checked />
-            <span class="mode-title">Use XAMPP</span>
-            <span class="mode-copy">Detect local XAMPP and connect to its MariaDB service.</span>
-          </label>
-          <label class="mode-card" data-mode-card="mysql">
-            <input type="radio" name="mode" value="mysql" />
-            <span class="mode-title">Use MySQL Server</span>
-            <span class="mode-copy">Connect to standalone MySQL, MariaDB, or a server on another computer.</span>
-          </label>
-        </div>
-
-        <div id="xampp-status" class="status-box neutral">
-          <span class="status-dot"></span>
-          <div>
-            <strong>Checking for XAMPP...</strong>
-            <p id="xampp-status-detail">Looking in common Windows installation folders.</p>
-          </div>
-          <button id="open-xampp" type="button" class="button secondary hidden">Open XAMPP</button>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>2. MySQL connection</h2>
-        <div class="form-grid two">
-          <label>
-            <span>Host or IP address</span>
-            <input id="host" value="127.0.0.1" autocomplete="off" />
-          </label>
-          <label>
-            <span>Port</span>
-            <input id="port" type="number" min="1" max="65535" value="3306" />
-          </label>
-          <label>
-            <span>Administrator username</span>
-            <input id="db-username" value="root" autocomplete="username" />
-          </label>
-          <label>
-            <span>Administrator password</span>
-            <div class="password-row">
-              <input id="db-password" type="password" autocomplete="current-password" />
-              <button type="button" class="text-button" data-toggle-password="db-password">Show</button>
-            </div>
-          </label>
+        <h2>1. MongoDB connection</h2>
+        <div class="form-grid">
           <label class="wide">
-            <span>POS database name</span>
-            <input id="database" value="electro_pos" autocomplete="off" />
+            <span>Connection URI</span>
+            <div class="password-row">
+              <input id="mongo-uri" type="password" value="mongodb://127.0.0.1:27017/electro_pos" autocomplete="off" />
+              <button type="button" class="text-button" data-toggle-password="mongo-uri">Show</button>
+            </div>
+            <small>Use a local replica set or MongoDB Atlas. Transactions require a replica set or sharded cluster.</small>
           </label>
         </div>
-
-        <div class="choice-row">
-          <label class="check-label">
-            <input id="create-database" type="checkbox" checked />
-            <span>Create the database when it does not exist</span>
-          </label>
-        </div>
-
-        <fieldset>
-          <legend>Credentials saved by the POS</legend>
-          <label class="radio-line">
-            <input type="radio" name="credential-mode" value="dedicated" checked />
-            <span>
-              <strong>Create a dedicated POS database user</strong>
-              <small>Recommended. Administrator credentials are used once and are not saved.</small>
-            </span>
-          </label>
-          <label class="radio-line">
-            <input type="radio" name="credential-mode" value="provided" />
-            <span>
-              <strong>Use the supplied MySQL account</strong>
-              <small>Use this when a database administrator already created the exact POS account.</small>
-            </span>
-          </label>
-        </fieldset>
 
         <div class="action-row">
           <button id="test-connection" type="button" class="button secondary">Test connection</button>
@@ -110,9 +45,9 @@
       </section>
 
       <section class="panel">
-        <h2>3. Create the first POS administrator</h2>
+        <h2>2. Create the first POS administrator</h2>
         <p class="section-help">
-          These are POS login details, not MySQL credentials. The account is created only when the database has no POS users.
+          These are POS login details, not MongoDB credentials. The account is created only when the database has no POS users.
         </p>
         <div class="form-grid two">
           <label>
@@ -144,7 +79,7 @@
       <section class="finish-panel">
         <div>
           <strong>Ready to initialize</strong>
-          <p>The app will create or validate the database, run safe schema migrations, and open the POS.</p>
+          <p>The app will validate MongoDB, initialize indexes, and open the POS.</p>
         </div>
         <button id="complete-setup" type="button" class="button primary">Create and open POS</button>
       </section>
@@ -153,7 +88,7 @@
         <div class="progress-card">
           <div class="spinner"></div>
           <h3>Preparing Shanthi Electricals POS</h3>
-          <p id="progress-message">Connecting to MySQL...</p>
+          <p id="progress-message">Connecting to MongoDB...</p>
         </div>
       </div>
     </main>

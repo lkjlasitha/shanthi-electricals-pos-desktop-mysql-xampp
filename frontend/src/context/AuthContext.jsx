@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { AuthAPI } from '../api/endpoints';
-import { STORAGE_KEYS, clearStoredAuth, getStoredToken } from '../api/client';
+import { STORAGE_KEYS, clearStoredAuth, getStoredToken, setStoredToken } from '../api/client';
 
 const AuthContext = createContext(null);
 
@@ -15,7 +15,7 @@ function readStoredUser() {
 }
 
 function storeAuth(token, user) {
-  localStorage.setItem(STORAGE_KEYS.token, token);
+  setStoredToken(token);
   localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
   localStorage.removeItem(STORAGE_KEYS.legacyToken);
   localStorage.removeItem(STORAGE_KEYS.legacyUser);
@@ -47,8 +47,17 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     const res = await AuthAPI.login(email, password);
     storeAuth(res.data.token, res.data.user);
-    setUser(res.data.user);
-    return res.data.user;
+    try {
+      const verified = await AuthAPI.me();
+      const currentUser = verified.data.data;
+      storeAuth(res.data.token, currentUser);
+      setUser(currentUser);
+      return currentUser;
+    } catch (error) {
+      clearStoredAuth();
+      setUser(null);
+      throw error;
+    }
   };
 
   const logout = () => {

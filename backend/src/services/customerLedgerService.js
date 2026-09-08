@@ -1,4 +1,4 @@
-const { getRawCollection } = require('../config/sequelizeCompat');
+const { Customer, Sale, CustomerPayment } = require('../models/associations');
 
 function asNumber(value) {
   const number = Number(value || 0);
@@ -67,121 +67,64 @@ function planCustomerPayment({ amount, opening_balance_due, sales = [] }) {
 
 // Returns every customer with their aggregated balances. Used for the
 // Customers list (badges) and the Accounts Receivable view.
-//
-// This pulls all sales and all customer_payments once and aggregates them in
-// plain JS rather than as a single database-side join/group query. At the
-// scale of a single shop's transaction history that's negligible work, and
-// it sidesteps having to hand-translate a fairly intricate multi-join SQL
-// query (with CASE WHEN / CURDATE() comparisons) into an equivalent Mongo
-// aggregation pipeline, which would be far harder to read and verify.
 async function listCustomerBalances({ onlyOutstanding = false } = {}) {
   const [customers, sales, payments] = await Promise.all([
-    (await getRawCollection('customers')).find({}).sort({ name: 1 }).toArray(),
-    (await getRawCollection('sales')).find({}, {
-      projection: { customer_id: 1, grand_total: 1, paid_amount: 1, due_date: 1, date: 1 },
-    }).toArray(),
-    (await getRawCollection('customer_payments')).find({}, {
-      projection: { customer_id: 1, amount: 1, opening_balance_amount: 1, paid_on: 1 },
-    }).toArray(),
+    Customer.findAll({ order: [['name', 'ASC']] }), Sale.findAll(), CustomerPayment.findAll(),
   ]);
-
   const today = new Date().toISOString().slice(0, 10);
-  const salesByCustomer = new Map();
-  for (const sale of sales) {
-    const key = Number(sale.customer_id);
-    const due = Math.max(asNumber(sale.grand_total) - asNumber(sale.paid_amount), 0);
-    const bucket = salesByCustomer.get(key) || {
-      total_purchases: 0, invoice_count: 0, last_purchase_date: null,
-      sales_due: 0, unpaid_invoice_count: 0, overdue_due: 0, oldest_due_date: null,
-    };
-    bucket.total_purchases += asNumber(sale.grand_total);
-    bucket.invoice_count += 1;
-    if (!bucket.last_purchase_date || sale.date > bucket.last_purchase_date) bucket.last_purchase_date = sale.date;
-    bucket.sales_due += due;
-    if (due > 0.005) {
-      bucket.unpaid_invoice_count += 1;
-      if (sale.due_date && sale.due_date < today) bucket.overdue_due += due;
-      if (sale.due_date && (!bucket.oldest_due_date || sale.due_date < bucket.oldest_due_date)) {
-        bucket.oldest_due_date = sale.due_date;
-      }
-    }
-    salesByCustomer.set(key, bucket);
-  }
-
-  const paymentsByCustomer = new Map();
-  for (const payment of payments) {
-    const key = Number(payment.customer_id);
-    const amount = asNumber(payment.amount);
-    const openingPortion = payment.opening_balance_amount === null || payment.opening_balance_amount === undefined
-      ? amount
-      : asNumber(payment.opening_balance_amount);
-    const bucket = paymentsByCustomer.get(key) || { account_payments: 0, opening_payments: 0, last_account_payment_date: null };
-    bucket.account_payments += amount;
-    bucket.opening_payments += openingPortion;
-    if (!bucket.last_account_payment_date || payment.paid_on > bucket.last_account_payment_date) {
-      bucket.last_account_payment_date = payment.paid_on;
-    }
-    paymentsByCustomer.set(key, bucket);
-  }
-
-  const withDue = customers.map((customer) => {
-    const salesBucket = salesByCustomer.get(Number(customer.id)) || {
-      total_purchases: 0, invoice_count: 0, last_purchase_date: null,
-      sales_due: 0, unpaid_invoice_count: 0, overdue_due: 0, oldest_due_date: null,
-    };
-    const paymentsBucket = paymentsByCustomer.get(Number(customer.id)) || {
-      account_payments: 0, opening_payments: 0, last_account_payment_date: null,
-    };
-    const due = computeCustomerDue({
-      opening_balance: customer.opening_balance,
-      sales_due: salesBucket.sales_due,
-      account_payments: paymentsBucket.account_payments,
-      opening_payments: paymentsBucket.opening_payments,
-    });
+  const rows = customers.map((customer) => {
+    const customerSales = sales.filter((sale) => Number(sale.customer_id) === Number(customer.id));
+    const customerPayments = payments.filter((payment) => Number(payment.customer_id) === Number(customer.id));
+    const openSales = customerSales.map((sale) => ({ sale, due: Math.max(0, asNumber(sale.grand_total) - asNumber(sale.paid_amount)) })).filter((row) => row.due > 0.005);
     return {
-      id: customer.id,
-      name: customer.name,
-      phone: customer.phone,
-      email: customer.email,
-      city: customer.city,
-      customer_type: customer.customer_type,
-      credit_limit: customer.credit_limit === null || customer.credit_limit === undefined ? null : asNumber(customer.credit_limit),
-      payment_terms_days: customer.payment_terms_days,
-      opening_balance: asNumber(customer.opening_balance),
-      is_active: customer.is_active,
-      total_purchases: asNumber(salesBucket.total_purchases),
-      invoice_count: salesBucket.invoice_count,
-      unpaid_invoice_count: salesBucket.unpaid_invoice_count,
-      oldest_due_date: salesBucket.oldest_due_date,
-      last_purchase_date: salesBucket.last_purchase_date,
-      last_account_payment_date: paymentsBucket.last_account_payment_date,
+      ...customer.toJSON(),
+      sales_due: openSales.reduce((sum, row) => sum + row.due, 0),
+      account_payments: customerPayments.reduce((sum, row) => sum + asNumber(row.amount), 0),
+      opening_payments: customerPayments.reduce((sum, row) => sum + asNumber(row.opening_balance_amount ?? row.amount), 0),
+      total_purchases: customerSales.reduce((sum, sale) => sum + asNumber(sale.grand_total), 0),
+      invoice_count: customerSales.length,
+      unpaid_invoice_count: openSales.length,
+      overdue_due: openSales.filter(({ sale }) => sale.due_date && sale.due_date < today).reduce((sum, row) => sum + row.due, 0),
+      oldest_due_date: openSales.map(({ sale }) => sale.due_date).filter(Boolean).sort()[0] || null,
+      last_purchase_date: customerSales.map((sale) => sale.date).filter(Boolean).sort().at(-1) || null,
+      last_account_payment_date: customerPayments.map((payment) => payment.paid_on).filter(Boolean).sort().at(-1) || null,
+    };
+  });
+
+  const withDue = rows.map((row) => {
+    const due = computeCustomerDue(row);
+    return {
+      ...row,
+      credit_limit: row.credit_limit === null ? null : asNumber(row.credit_limit),
+      opening_balance: asNumber(row.opening_balance),
+      total_purchases: asNumber(row.total_purchases),
+      invoice_count: Number(row.invoice_count || 0),
+      unpaid_invoice_count: Number(row.unpaid_invoice_count || 0),
       sales_due: due.sales_due,
       opening_balance_due: due.opening_balance_due,
       total_due: due.total_due,
-      overdue_due: asNumber(salesBucket.overdue_due),
-      current_due: Math.max(0, due.total_due - asNumber(salesBucket.overdue_due)),
-      over_credit_limit: asNumber(customer.credit_limit) > 0 && due.total_due > asNumber(customer.credit_limit),
+      overdue_due: asNumber(row.overdue_due),
+      current_due: Math.max(0, due.total_due - asNumber(row.overdue_due)),
+      over_credit_limit: asNumber(row.credit_limit) > 0 && due.total_due > asNumber(row.credit_limit),
     };
   });
 
   return onlyOutstanding ? withDue.filter((row) => row.total_due > 0.005) : withDue;
 }
 
-// Aggregate totals for the dashboard (a handful of numbers, no per-customer detail).
+// Aggregate totals for the dashboard (fast, single-row query — no per-customer detail).
 async function getReceivablesTotals() {
   const balances = await listCustomerBalances();
   const salesDue = balances.reduce((sum, row) => sum + row.sales_due, 0);
   const openingDue = balances.reduce((sum, row) => sum + row.opening_balance_due, 0);
   const overdueDue = balances.reduce((sum, row) => sum + row.overdue_due, 0);
-  const customersWithOpenSales = balances.filter((row) => row.sales_due > 0.005).length;
-
   return {
     outstanding_receivables: salesDue + openingDue,
     outstanding_from_sales: salesDue,
     outstanding_from_opening_balance: openingDue,
     overdue_receivables: overdueDue,
     current_receivables: Math.max(0, salesDue + openingDue - overdueDue),
-    customers_with_open_sales: customersWithOpenSales,
+    customers_with_open_sales: balances.filter((row) => row.sales_due > 0.005).length,
   };
 }
 

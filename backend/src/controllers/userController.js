@@ -12,6 +12,12 @@ const list = asyncHandler(async (req, res) => {
   res.json({ data: users });
 });
 
+const getOne = asyncHandler(async (req, res) => {
+  const user = await User.findByPk(req.params.id, { include: [Role, Warehouse], attributes: { exclude: ['password'] } });
+  if (!user) return res.status(404).json({ message: 'Not found' });
+  res.json({ data: user });
+});
+
 const create = asyncHandler(async (req, res) => {
   const { name, email, password, phone, role_id, warehouse_id, language } = req.body;
   if (!name || !email || !password || !role_id) {
@@ -61,4 +67,4 @@ const remove = asyncHandler(async (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-module.exports = { list, create, update, remove };
+module.exports = { list, getOne, create, update, remove };

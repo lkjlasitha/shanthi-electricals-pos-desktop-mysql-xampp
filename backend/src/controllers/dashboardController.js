@@ -1,7 +1,8 @@
-const { Op, getRawCollection } = require('../config/sequelizeCompat');
+const { Op, fn, col } = require('../config/db');
 const {
   Sale, Purchase, Customer, Supplier, Product, ManageStock, Expense,
-  SaleReturn, PurchaseReturn, Warehouse,
+  SaleReturn, PurchaseReturn, Warehouse, SalesPayment, CustomerPayment,
+  POSRegister, SaleItem, PurchasePayment,
 } = require('../models/associations');
 const { asyncHandler } = require('../utils/helpers');
 const { getReceivablesTotals } = require('../services/customerLedgerService');
@@ -34,15 +35,10 @@ function rowsByKey(rows, key = 'date', value = 'total') {
   return new Map(rows.map((row) => [String(row[key]), asNumber(row[value])]));
 }
 
-// Sums `valueField` from `docs` grouped by a date/month key. `keyFn` turns
-// each document's date into the grouping key (a day string or 'YYYY-MM').
-function sumByKey(docs, keyFn, valueField) {
+function aggregateRows(rows, key, value) {
   const totals = new Map();
-  for (const doc of docs) {
-    const key = keyFn(doc);
-    totals.set(key, (totals.get(key) || 0) + asNumber(doc[valueField]));
-  }
-  return Array.from(totals.entries()).map(([key, total]) => ({ key, total }));
+  for (const row of rows) totals.set(String(row[key]), (totals.get(String(row[key])) || 0) + asNumber(row[value]));
+  return [...totals].map(([groupKey, total]) => ({ [key]: groupKey, total }));
 }
 
 const summary = asyncHandler(async (req, res) => {
@@ -53,58 +49,27 @@ const summary = asyncHandler(async (req, res) => {
   const warehouseId = req.query.warehouse_id ? Number(req.query.warehouse_id) : null;
   const warehouseWhere = warehouseId ? { warehouse_id: warehouseId } : {};
   const purchaseWarehouseWhere = { ...warehouseWhere, status: { [Op.ne]: 'cancelled' } };
-
-  // ---- Money received today (invoice payments + opening-balance payments) ----
-  // Only the opening-balance portion of a customer_payment is counted here;
-  // invoice-allocated portions already exist as sales_payments rows and must
-  // not be counted twice.
-  async function totalReceivedToday() {
-    const salesPaymentsCol = await getRawCollection('sales_payments');
-    const salesPayments = await salesPaymentsCol.find({ paid_on: today }, { projection: { amount: 1, sale_id: 1 } }).toArray();
-    let invoicePortion = 0;
-    if (salesPayments.length) {
-      if (warehouseId) {
-        const saleIds = [...new Set(salesPayments.map((p) => p.sale_id))];
-        const matchingSales = await Sale.findAll({ where: { id: { [Op.in]: saleIds }, warehouse_id: warehouseId }, attributes: ['id'] });
-        const allowedIds = new Set(matchingSales.map((s) => s.id));
-        invoicePortion = salesPayments.filter((p) => allowedIds.has(p.sale_id)).reduce((sum, p) => sum + asNumber(p.amount), 0);
-      } else {
-        invoicePortion = salesPayments.reduce((sum, p) => sum + asNumber(p.amount), 0);
-      }
-    }
-
-    const customerPaymentsCol = await getRawCollection('customer_payments');
-    const customerPayments = await customerPaymentsCol.find({ paid_on: today }, {
-      projection: { amount: 1, opening_balance_amount: 1, pos_register_id: 1 },
-    }).toArray();
-    let openingPortion = 0;
-    if (customerPayments.length) {
-      let allowedRegisterIds = null;
-      if (warehouseId) {
-        const registersCol = await getRawCollection('pos_registers');
-        const registers = await registersCol.find({ warehouse_id: warehouseId }, { projection: { id: 1 } }).toArray();
-        allowedRegisterIds = new Set(registers.map((r) => r.id));
-      }
-      openingPortion = customerPayments
-        .filter((p) => !allowedRegisterIds || allowedRegisterIds.has(p.pos_register_id))
-        .reduce((sum, p) => sum + (p.opening_balance_amount === null || p.opening_balance_amount === undefined ? asNumber(p.amount) : asNumber(p.opening_balance_amount)), 0);
-    }
-
-    return invoicePortion + openingPortion;
-  }
+  const warehouseSales = warehouseId ? await Sale.findAll({ where: warehouseWhere, attributes: ['id'] }) : [];
+  const warehouseSaleIds = warehouseSales.map((sale) => sale.id);
+  const registers = warehouseId ? await POSRegister.findAll({ where: { warehouse_id: warehouseId } }) : [];
+  const registerIds = registers.map((register) => register.id);
 
   const [
     todaySales, todayPurchases, todaySaleReturns, todayPurchaseReturns,
     todayExpenses, todayReceived, monthSales, monthPurchases, monthExpenses,
     monthSaleReturns, monthPurchaseReturns, customerCount, supplierCount, productCount,
-    weekSales, weekPurchases, recentSales, productsWithStock,
+    weeklySalesRows, weeklyPurchaseRows, recentSales, productsWithStock,
   ] = await Promise.all([
     Sale.sum('grand_total', { where: { ...warehouseWhere, date: today } }),
     Purchase.sum('grand_total', { where: { ...purchaseWarehouseWhere, date: today } }),
     SaleReturn.sum('grand_total', { where: { ...warehouseWhere, date: today } }),
     PurchaseReturn.sum('grand_total', { where: { ...warehouseWhere, date: today } }),
     Expense.sum('amount', { where: { ...warehouseWhere, date: today } }),
-    totalReceivedToday(),
+    Promise.all([
+      SalesPayment.findAll({ where: { paid_on: today, ...(warehouseId ? { sale_id: { [Op.in]: warehouseSaleIds } } : {}) } }),
+      CustomerPayment.findAll({ where: { paid_on: today, ...(warehouseId ? { pos_register_id: { [Op.in]: registerIds } } : {}) } }),
+    ]).then(([salePayments, accountPayments]) => salePayments.reduce((sum, row) => sum + asNumber(row.amount), 0)
+      + accountPayments.reduce((sum, row) => sum + asNumber(row.opening_balance_amount ?? row.amount), 0)),
     Sale.sum('grand_total', { where: { ...warehouseWhere, date: { [Op.between]: [startOfMonth, today] } } }),
     Purchase.sum('grand_total', { where: { ...purchaseWarehouseWhere, date: { [Op.between]: [startOfMonth, today] } } }),
     Expense.sum('amount', { where: { ...warehouseWhere, date: { [Op.between]: [startOfMonth, today] } } }),
@@ -113,8 +78,16 @@ const summary = asyncHandler(async (req, res) => {
     Customer.count(),
     Supplier.count(),
     Product.count({ where: { is_active: true } }),
-    Sale.findAll({ where: { ...warehouseWhere, date: { [Op.between]: [weekStart, today] } }, attributes: ['date', 'grand_total'] }),
-    Purchase.findAll({ where: { ...warehouseWhere, date: { [Op.between]: [weekStart, today] } }, attributes: ['date', 'grand_total'] }),
+    Sale.findAll({
+      attributes: ['date', [fn('SUM', col('grand_total')), 'total']],
+      where: { ...purchaseWarehouseWhere, date: { [Op.between]: [weekStart, today] } },
+      group: ['date'], raw: true,
+    }),
+    Purchase.findAll({
+      attributes: ['date', [fn('SUM', col('grand_total')), 'total']],
+      where: { ...warehouseWhere, date: { [Op.between]: [weekStart, today] } },
+      group: ['date'], raw: true,
+    }),
     Sale.findAll({
       where: warehouseWhere,
       include: [
@@ -135,69 +108,49 @@ const summary = asyncHandler(async (req, res) => {
     }),
   ]);
 
-  const weeklySalesRows = sumByKey(weekSales, (row) => row.date, 'grand_total');
-  const weeklyPurchaseRows = sumByKey(weekPurchases, (row) => row.date, 'grand_total');
-  const weeklySales = rowsByKey(weeklySalesRows, 'key');
-  const weeklyPurchases = rowsByKey(weeklyPurchaseRows, 'key');
+  const [periodSales, periodPurchases, periodExpenses] = await Promise.all([
+    Sale.findAll({ where: { ...warehouseWhere, date: { [Op.between]: [sixMonthStart, today] } } }),
+    Purchase.findAll({ where: { ...purchaseWarehouseWhere, date: { [Op.between]: [sixMonthStart, today] } } }),
+    Expense.findAll({ where: { ...warehouseWhere, date: { [Op.between]: [sixMonthStart, today] } } }),
+  ]);
+  const monthSalesRows = periodSales.filter((sale) => sale.date >= startOfMonth);
+  const monthSaleIds = monthSalesRows.map((sale) => sale.id);
+  const [monthItems, productRows, customerRows] = await Promise.all([
+    monthSaleIds.length ? SaleItem.findAll({ where: { sale_id: { [Op.in]: monthSaleIds }, product_id: { [Op.ne]: null } } }) : [],
+    Product.findAll(), Customer.findAll(),
+  ]);
+  const productMap = new Map(productRows.map((row) => [Number(row.id), row]));
+  const topMap = new Map();
+  for (const item of monthItems) {
+    const product = productMap.get(Number(item.product_id));
+    if (!product) continue;
+    const value = topMap.get(product.id) || { id: product.id, name: product.name, code: product.code, total_quantity: 0, total_revenue: 0 };
+    value.total_quantity += asNumber(item.quantity); value.total_revenue += asNumber(item.sub_total); topMap.set(product.id, value);
+  }
+  const topProducts = [...topMap.values()].sort((a, b) => b.total_quantity - a.total_quantity || b.total_revenue - a.total_revenue).slice(0, 7);
+  const customerMap = new Map(customerRows.map((row) => [Number(row.id), row]));
+  const customerTotals = new Map();
+  for (const sale of monthSalesRows) {
+    const customer = customerMap.get(Number(sale.customer_id));
+    if (!customer) continue;
+    const value = customerTotals.get(customer.id) || { id: customer.id, name: customer.name, grand_total: 0, invoice_count: 0 };
+    value.grand_total += asNumber(sale.grand_total); value.invoice_count += 1; customerTotals.set(customer.id, value);
+  }
+  const topCustomers = [...customerTotals.values()].sort((a, b) => b.grand_total - a.grand_total).slice(0, 5);
+  const monthlySales = aggregateRows(periodSales.map((row) => ({ month_key: row.date.slice(0, 7), total: row.grand_total })), 'month_key', 'total');
+  const monthlyPurchases = aggregateRows(periodPurchases.map((row) => ({ month_key: row.date.slice(0, 7), total: row.grand_total })), 'month_key', 'total');
+  const monthlyExpenses = aggregateRows(periodExpenses.map((row) => ({ month_key: row.date.slice(0, 7), total: row.amount })), 'month_key', 'total');
+
+  const weeklySales = rowsByKey(weeklySalesRows);
+  const weeklyPurchases = rowsByKey(weeklyPurchaseRows);
   const weeklyActivity = Array.from({ length: 7 }, (_, index) => {
     const date = addDays(weekStart, index);
     return { date, sales: weeklySales.get(date) || 0, purchases: weeklyPurchases.get(date) || 0 };
   });
 
-  // ---- Top-selling products & top customers this month ----
-  const monthSalesForWarehouse = await Sale.findAll({
-    where: { ...warehouseWhere, date: { [Op.between]: [startOfMonth, today] } },
-    attributes: ['id', 'customer_id', 'grand_total'],
-  });
-  const monthSaleIds = monthSalesForWarehouse.map((sale) => sale.id);
-
-  const topProducts = [];
-  if (monthSaleIds.length) {
-    const saleItemsCol = await getRawCollection('sale_items');
-    const items = await saleItemsCol.find(
-      { sale_id: { $in: monthSaleIds }, product_id: { $ne: null } },
-      { projection: { product_id: 1, quantity: 1, sub_total: 1 } }
-    ).toArray();
-    const byProduct = new Map();
-    for (const item of items) {
-      const bucket = byProduct.get(item.product_id) || { total_quantity: 0, total_revenue: 0 };
-      bucket.total_quantity += asNumber(item.quantity);
-      bucket.total_revenue += asNumber(item.sub_total);
-      byProduct.set(item.product_id, bucket);
-    }
-    const productIds = [...byProduct.keys()];
-    if (productIds.length) {
-      const products = await Product.findAll({ where: { id: { [Op.in]: productIds } }, attributes: ['id', 'name', 'code'] });
-      const productById = new Map(products.map((p) => [p.id, p]));
-      topProducts.push(...productIds
-        .map((id) => ({ id, name: productById.get(id)?.name, code: productById.get(id)?.code, ...byProduct.get(id) }))
-        .sort((a, b) => (b.total_quantity - a.total_quantity) || (b.total_revenue - a.total_revenue))
-        .slice(0, 7));
-    }
-  }
-
-  const topCustomersMap = new Map();
-  for (const sale of monthSalesForWarehouse) {
-    const bucket = topCustomersMap.get(sale.customer_id) || { grand_total: 0, invoice_count: 0 };
-    bucket.grand_total += asNumber(sale.grand_total);
-    bucket.invoice_count += 1;
-    topCustomersMap.set(sale.customer_id, bucket);
-  }
-  const topCustomerIds = [...topCustomersMap.keys()].sort((a, b) => topCustomersMap.get(b).grand_total - topCustomersMap.get(a).grand_total).slice(0, 5);
-  const topCustomerRecords = topCustomerIds.length ? await Customer.findAll({ where: { id: { [Op.in]: topCustomerIds } }, attributes: ['id', 'name'] }) : [];
-  const customerNameById = new Map(topCustomerRecords.map((c) => [c.id, c.name]));
-  const topCustomers = topCustomerIds.map((id) => ({ id, name: customerNameById.get(id), ...topCustomersMap.get(id) }));
-
-  // ---- 6-month trend ----
-  const [sixMonthSales, sixMonthPurchases, sixMonthExpenses] = await Promise.all([
-    Sale.findAll({ where: { ...warehouseWhere, date: { [Op.between]: [sixMonthStart, today] } }, attributes: ['date', 'grand_total'] }),
-    Purchase.findAll({ where: { ...purchaseWarehouseWhere, date: { [Op.between]: [sixMonthStart, today] } }, attributes: ['date', 'grand_total'] }),
-    Expense.findAll({ where: { ...warehouseWhere, date: { [Op.between]: [sixMonthStart, today] } }, attributes: ['date', 'amount'] }),
-  ]);
-  const monthKey = (row) => String(row.date).slice(0, 7);
-  const salesByMonth = rowsByKey(sumByKey(sixMonthSales, monthKey, 'grand_total'), 'key');
-  const purchasesByMonth = rowsByKey(sumByKey(sixMonthPurchases, monthKey, 'grand_total'), 'key');
-  const expensesByMonth = rowsByKey(sumByKey(sixMonthExpenses, monthKey, 'amount'), 'key');
+  const salesByMonth = rowsByKey(monthlySales, 'month_key');
+  const purchasesByMonth = rowsByKey(monthlyPurchases, 'month_key');
+  const expensesByMonth = rowsByKey(monthlyExpenses, 'month_key');
   const monthlyTrend = Array.from({ length: 6 }, (_, index) => {
     const month = addMonths(today, index - 5);
     const sales = salesByMonth.get(month) || 0;
@@ -222,35 +175,16 @@ const summary = asyncHandler(async (req, res) => {
     outstanding_receivables: 0, outstanding_from_sales: 0, outstanding_from_opening_balance: 0,
     overdue_receivables: 0, current_receivables: 0, customers_with_open_sales: 0,
   }));
-
-  // ---- Payables (money owed to suppliers) ----
-  const openPurchases = await Purchase.findAll({
-    where: purchaseWarehouseWhere,
-    attributes: ['id', 'grand_total', 'returned_amount', 'paid_amount', 'due_date'],
-  });
-  let outstandingPayables = 0;
-  let overduePayables = 0;
-  let openSupplierBills = 0;
-  for (const purchase of openPurchases) {
-    const due = Math.max(asNumber(purchase.grand_total) - asNumber(purchase.returned_amount) - asNumber(purchase.paid_amount), 0);
-    if (due <= 0.005) continue;
-    outstandingPayables += due;
-    openSupplierBills += 1;
-    if (purchase.due_date && purchase.due_date < today) overduePayables += due;
-  }
-  const purchasePaymentsCol = await getRawCollection('purchase_payments');
-  const todaysPurchasePayments = await purchasePaymentsCol.find({ paid_on: today }, { projection: { amount: 1, purchase_id: 1 } }).toArray();
-  let supplierPaymentsToday = 0;
-  if (todaysPurchasePayments.length) {
-    if (warehouseId) {
-      const purchaseIds = [...new Set(todaysPurchasePayments.map((p) => p.purchase_id))];
-      const matchingPurchases = await Purchase.findAll({ where: { id: { [Op.in]: purchaseIds }, warehouse_id: warehouseId }, attributes: ['id'] });
-      const allowedIds = new Set(matchingPurchases.map((p) => p.id));
-      supplierPaymentsToday = todaysPurchasePayments.filter((p) => allowedIds.has(p.purchase_id)).reduce((sum, p) => sum + asNumber(p.amount), 0);
-    } else {
-      supplierPaymentsToday = todaysPurchasePayments.reduce((sum, p) => sum + asNumber(p.amount), 0);
-    }
-  }
+  const payablePurchases = await Purchase.findAll({ where: purchaseWarehouseWhere });
+  const openBills = payablePurchases.map((purchase) => ({ purchase, due: Math.max(0, asNumber(purchase.grand_total) - asNumber(purchase.returned_amount) - asNumber(purchase.paid_amount)) })).filter((row) => row.due > 0.005);
+  const payableIds = payablePurchases.map((purchase) => purchase.id);
+  const supplierPayments = payableIds.length ? await PurchasePayment.findAll({ where: { paid_on: today, purchase_id: { [Op.in]: payableIds } } }) : [];
+  const payables = {
+    outstanding_payables: openBills.reduce((sum, row) => sum + row.due, 0),
+    overdue_payables: openBills.filter(({ purchase }) => purchase.due_date && purchase.due_date < today).reduce((sum, row) => sum + row.due, 0),
+    open_supplier_bills: openBills.length,
+    supplier_payments_today: supplierPayments.reduce((sum, row) => sum + asNumber(row.amount), 0),
+  };
 
   res.json({
     data: {
@@ -273,8 +207,8 @@ const summary = asyncHandler(async (req, res) => {
       stock_value: stockValue,
       weekly_activity: weeklyActivity,
       monthly_trend: monthlyTrend,
-      top_selling_products: topProducts,
-      top_customers: topCustomers,
+      top_selling_products: topProducts.map((row) => ({ ...row, total_quantity: asNumber(row.total_quantity), total_revenue: asNumber(row.total_revenue) })),
+      top_customers: topCustomers.map((row) => ({ ...row, grand_total: asNumber(row.grand_total), invoice_count: Number(row.invoice_count || 0) })),
       low_stock_products: lowStockProducts,
       recent_sales: recentSales,
       outstanding_receivables: receivables.outstanding_receivables,
@@ -283,10 +217,10 @@ const summary = asyncHandler(async (req, res) => {
       overdue_receivables: receivables.overdue_receivables,
       current_receivables: receivables.current_receivables,
       customers_with_open_sales: receivables.customers_with_open_sales,
-      outstanding_payables: outstandingPayables,
-      overdue_payables: overduePayables,
-      open_supplier_bills: openSupplierBills,
-      supplier_payments_today: supplierPaymentsToday,
+      outstanding_payables: asNumber(payables?.outstanding_payables),
+      overdue_payables: asNumber(payables?.overdue_payables),
+      open_supplier_bills: Number(payables?.open_supplier_bills || 0),
+      supplier_payments_today: asNumber(payables?.supplier_payments_today),
     },
   });
 });

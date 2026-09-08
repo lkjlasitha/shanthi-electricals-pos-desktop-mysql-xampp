@@ -1,4 +1,4 @@
-const { Op } = require('../config/sequelizeCompat');
+const { Op } = require('../config/db');
 const { todayISO } = require('../utils/date');
 const {
   Sale, SaleItem, Product, Customer, Warehouse, SalesPayment, POSRegister, sequelize,
@@ -218,7 +218,7 @@ const addPayment = asyncHandler(async (req, res) => {
     const newPaidTotal = Number(sale.paid_amount) + amount;
     sale.paid_amount = newPaidTotal;
     sale.payment_status = newPaidTotal >= Number(sale.grand_total) - 0.005 ? 'paid' : 'partial';
-    await sale.save({ transaction });
+    await sale.save({ session: transaction.session });
     return sale;
   });
 

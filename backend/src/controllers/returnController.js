@@ -1,4 +1,4 @@
-const { Op, getRawCollection } = require('../config/sequelizeCompat');
+const { Op } = require('../config/db');
 const {
   SaleReturn, SaleReturnItem, Sale, SaleItem, Customer, Warehouse,
   PurchaseReturn, PurchaseReturnItem, Purchase, PurchaseItem, Supplier,
@@ -30,31 +30,18 @@ function aggregateSourceItems(items, valueField) {
   return rows;
 }
 
-// Sums already-returned quantities per product for a given sale/purchase,
-// so a second partial return can't exceed what's left returnable. Written
-// directly against the Mongo collections (rather than through the model
-// shim) since it's a simple two-step aggregate: find the return headers for
-// this source document, then sum their line items by product.
 async function returnedQuantities(kind, sourceId, transaction) {
   const saleMode = kind === 'sale';
-  const returnTable = saleMode ? 'sale_returns' : 'purchase_returns';
-  const itemTable = saleMode ? 'sale_return_items' : 'purchase_return_items';
+  const ReturnModel = saleMode ? SaleReturn : PurchaseReturn;
+  const ItemModel = saleMode ? SaleReturnItem : PurchaseReturnItem;
   const returnForeignKey = saleMode ? 'sale_return_id' : 'purchase_return_id';
   const sourceForeignKey = saleMode ? 'sale_id' : 'purchase_id';
-  const session = transaction?.session;
-
-  const returnsCollection = await getRawCollection(returnTable);
-  const returnIds = (await returnsCollection.find({ [sourceForeignKey]: sourceId }, { session, projection: { id: 1 } }).toArray())
-    .map((row) => row.id);
-  if (!returnIds.length) return new Map();
-
-  const itemsCollection = await getRawCollection(itemTable);
-  const rows = await itemsCollection.aggregate([
-    { $match: { [returnForeignKey]: { $in: returnIds } } },
-    { $group: { _id: '$product_id', returned_quantity: { $sum: '$quantity' } } },
-  ], { session }).toArray();
-
-  return new Map(rows.map((row) => [Number(row._id), Number(row.returned_quantity || 0)]));
+  const returns = await ReturnModel.findAll({ where: { [sourceForeignKey]: sourceId }, transaction });
+  if (!returns.length) return new Map();
+  const items = await ItemModel.findAll({ where: { [returnForeignKey]: { [Op.in]: returns.map((row) => row.id) } }, transaction });
+  const totals = new Map();
+  for (const item of items) totals.set(Number(item.product_id), (totals.get(Number(item.product_id)) || 0) + Number(item.quantity || 0));
+  return totals;
 }
 
 async function buildSaleReturnable(saleId, transaction) {
@@ -273,7 +260,7 @@ const createPurchaseReturn = asyncHandler(async (req, res) => {
     const remainingBillValue = Math.max(0, Number(purchase.grand_total || 0) - Number(purchase.returned_amount || 0));
     purchase.returned_amount = Number(purchase.returned_amount || 0) + Math.min(grandTotal, remainingBillValue);
     purchase.payment_status = computePurchaseBalance(purchase).payment_status;
-    await purchase.save({ transaction });
+    await purchase.save({ session: transaction.session });
 
     return purchaseReturn;
   });

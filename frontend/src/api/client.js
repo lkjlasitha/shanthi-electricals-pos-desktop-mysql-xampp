@@ -7,11 +7,21 @@ export const STORAGE_KEYS = {
   legacyUser: 'electro_pos_user',
 };
 
+let activeToken = null;
+
 export function getStoredToken() {
-  return localStorage.getItem(STORAGE_KEYS.token) || localStorage.getItem(STORAGE_KEYS.legacyToken);
+  return activeToken || localStorage.getItem(STORAGE_KEYS.token) || localStorage.getItem(STORAGE_KEYS.legacyToken);
+}
+
+export function setStoredToken(token) {
+  const normalized = String(token || '').trim();
+  if (!normalized) throw new Error('The login response did not contain an authentication token.');
+  activeToken = normalized;
+  localStorage.setItem(STORAGE_KEYS.token, normalized);
 }
 
 export function clearStoredAuth() {
+  activeToken = null;
   Object.values(STORAGE_KEYS).forEach((key) => localStorage.removeItem(key));
 }
 

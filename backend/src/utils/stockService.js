@@ -20,7 +20,7 @@ async function adjustStock({ productId, warehouseId, delta, transaction, allowNe
     throw err;
   }
   stock.quantity = newQuantity;
-  await stock.save({ transaction });
+  await stock.save({ session: transaction.session });
   return stock;
 }
 

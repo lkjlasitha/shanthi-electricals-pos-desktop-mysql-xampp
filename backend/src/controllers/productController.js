@@ -1,4 +1,4 @@
-const { Op } = require('../config/sequelizeCompat');
+const { Op } = require('../config/db');
 const {
   Product, ProductCategory, Brand, Unit, ManageStock, Warehouse,
   MainProduct, VariationProduct, Variation, VariationType, ProductPriceHistory, User, Purchase,
@@ -108,30 +108,19 @@ async function reconcileProductStock({ product, requestedRows, reason, userId, c
 }
 
 async function validateProductReferences(productData, transaction) {
-  const checks = [];
-
   if (productData.product_category_id !== undefined) {
-    checks.push(
-      ProductCategory.findByPk(productData.product_category_id, { transaction }).then((record) => {
-        if (!record) throw new HttpError(422, 'The selected product category no longer exists. Refresh the page and select it again.');
-      })
-    );
+    const record = await ProductCategory.findByPk(productData.product_category_id, { transaction });
+    if (!record) throw new HttpError(422, 'The selected product category no longer exists. Refresh the page and select it again.');
   }
 
   if (productData.brand_id) {
-    checks.push(
-      Brand.findByPk(productData.brand_id, { transaction }).then((record) => {
-        if (!record) throw new HttpError(422, 'The selected brand no longer exists. Refresh the page and select it again.');
-      })
-    );
+    const record = await Brand.findByPk(productData.brand_id, { transaction });
+    if (!record) throw new HttpError(422, 'The selected brand no longer exists. Refresh the page and select it again.');
   }
 
   if (productData.main_product_id) {
-    checks.push(
-      MainProduct.findByPk(productData.main_product_id, { transaction }).then((record) => {
-        if (!record) throw new HttpError(422, 'The selected main product no longer exists.');
-      })
-    );
+    const record = await MainProduct.findByPk(productData.main_product_id, { transaction });
+    if (!record) throw new HttpError(422, 'The selected main product no longer exists.');
   }
 
   const unitIds = [...new Set([
@@ -141,16 +130,9 @@ async function validateProductReferences(productData, transaction) {
   ].filter(Boolean))];
 
   if (unitIds.length) {
-    checks.push(
-      Unit.count({ where: { id: unitIds }, transaction }).then((count) => {
-        if (count !== unitIds.length) {
-          throw new HttpError(422, 'One or more selected units no longer exist. Refresh the page and select the units again.');
-        }
-      })
-    );
+    const count = await Unit.count({ where: { id: unitIds }, transaction });
+    if (count !== unitIds.length) throw new HttpError(422, 'One or more selected units no longer exist. Refresh the page and select the units again.');
   }
-
-  await Promise.all(checks);
 }
 
 
@@ -702,10 +684,8 @@ const setStock = asyncHandler(async (req, res) => {
   const quantity = finiteNumber(req.body?.quantity, 'Stock quantity', { required: true, min: 0 });
 
   const result = await sequelize.transaction(async (transaction) => {
-    const [product, warehouse] = await Promise.all([
-      Product.findByPk(productId, { transaction, lock: transaction.LOCK.UPDATE }),
-      Warehouse.findByPk(warehouseId, { transaction }),
-    ]);
+    const product = await Product.findByPk(productId, { transaction, lock: transaction.LOCK.UPDATE });
+    const warehouse = await Warehouse.findByPk(warehouseId, { transaction });
     if (!product) throw new HttpError(404, 'Product not found');
     if (!warehouse) throw new HttpError(422, 'The selected warehouse no longer exists.');
 
